@@ -66,8 +66,12 @@ Complete RESTful API for a University Student Academic Management System. Built 
 ### Auth
 *   `POST /api/auth/register` (Super Admin/Admin)
 *   `POST /api/auth/login` (Public)
+*   `POST /api/auth/refresh-token` (Public - Dual Token System)
 *   `GET /api/auth/me` (Private)
 *   `PUT /api/auth/update-profile` (Private)
+*   `GET /api/auth/logout` (Public)
+
+For complete endpoint details and integration guides, see [API_DOCUMENTATION.md](./API_DOCUMENTATION.md).
 
 ### Academic Entities
 *   `GET/POST/PUT/DELETE /api/classes`

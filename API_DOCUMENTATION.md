@@ -7,8 +7,14 @@ All API endpoints are prefixed with: `/api`
 Example: `https://diit-sams-api.onrender.com/api/`
 
 ## Authentication & Authorization
-All secured endpoints require a JWT token passed in the `Authorization` header.
-Format: `Authorization: Bearer <token>`
+The system uses a **Dual-Token** authentication mechanism for enhanced security:
+1.  **Access Token**: Short-lived (15 minutes). Passed in the `Authorization` header as `Bearer <token>`.
+2.  **Refresh Token**: Long-lived (7 days). Automatically stored in a secure, `httpOnly` cookie named `refreshToken`.
+
+### How it works:
+- When the Access Token expires, the API returns a `401 Unauthorized` status with `isExpired: true`.
+- The frontend should then call `POST /api/auth/refresh-token` to receive a new pair of tokens.
+- No user interaction (re-login) is required as long as the Refresh Token is valid.
 
 ### Roles & Hierarchy
 The system uses a strict role hierarchy:
@@ -25,11 +31,13 @@ The system uses a strict role hierarchy:
 | Method | Endpoint | Description | Allowed Roles |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/register` | Register a new user | `super_admin`, `admin` |
-| `POST` | `/login` | Authenticate and receive JWT | Public |
+| `POST` | `/login` | Authenticate and receive tokens | Public |
+| `POST` | `/refresh-token` | Exchange refresh cookie for new tokens | Public |
 | `GET`  | `/me` | Get current logged-in user details | All authenticated |
 | `PUT`  | `/update-profile` | Update profile details | All authenticated |
 | `PUT`  | `/change-password` | Change account password | All authenticated |
 | `PUT`  | `/first-login-password` | Change password for the first time | All authenticated |
+| `GET`  | `/logout` | Clear all authentication cookies | Public |
 
 > **Note on Login**: If `isFirstLogin` is true, the login response will include `mustChangePassword: true` in the `data` object. The user MUST then call `/first-login-password` before continuing.
 
@@ -128,7 +136,8 @@ Required columns: `student_id, name, email, mobile, class, batch, section`
 ---
 
 ## Postman / Mobile App Integration Tips
-1. **Initial Login**: Always test the flow starting with `POST /api/auth/login` using the `admin@diit.com` Super Admin credentials. Save the resulting `token` to your app's secure storage or global state.
-2. **Error Handling**: The API returns standard JSON errors in the format: `{ "success": false, "error": "Error message" }`.
-3. **Pagination**: Most `GET` routes returning lists accept `?page=1&limit=20` query parameters. Total counts and pages are returned in the response wrapper.
-4. **Offline Support (Mobile)**: Use the `/api/sync` endpoints to pull down base master data (Classes, Subjects, Sections) to store in local SQLite/AsyncStorage to reduce redundant network calls.
+1. **Initial Login**: Use `POST /api/auth/login`. Store the returned `token` (Access Token) in your app's state. The `refreshToken` will be handled automatically by the browser/mobile cookie manager.
+2. **Automatic Refresh**: Implement an interceptor that detects `401` errors. If the error includes `isExpired: true`, call `POST /api/auth/refresh-token` before retrying the original request.
+3. **Error Handling**: The API returns standard JSON errors in the format: `{ "success": false, "error": "Error message" }`.
+4. **Pagination**: Most `GET` routes returning lists accept `?page=1&limit=20` query parameters. Total counts and pages are returned in the response wrapper.
+5. **Offline Support (Mobile)**: Use the `/api/sync` endpoints to pull down base master data (Classes, Subjects, Sections) to store in local SQLite/AsyncStorage.
