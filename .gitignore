@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+/node_modules/
+/node_modules/
+
+# Environment Variables (Critical to ignore)
+
+# .env.local
+# .env.development.local
+# .env.test.local
+# .env.production.local
+# backend/.env
+# frontend/.env
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+backend/dist/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+*.log
+
+# Editor directories and files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Firebase / Secret keys
+firebase-service-account.json
+*.pem
+*.key
