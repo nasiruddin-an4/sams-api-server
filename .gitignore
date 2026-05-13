@@ -1,17 +1,10 @@
 # Dependencies
 node_modules/
-/node_modules/
-/node_modules/
 
-# Environment Variables (Critical to ignore)
-
-# .env.local
-# .env.development.local
-# .env.test.local
-# .env.production.local
-# backend/.env
-# frontend/.env
-
+# Environment Variables
+.env
+.env.*
+!.env.example
 # Build outputs
 dist/
 build/
