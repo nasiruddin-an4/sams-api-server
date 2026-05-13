@@ -11,13 +11,9 @@ exports.protect = async (req, res, next) => {
     token = req.cookies.token;
   }
 
-  // If no token, assign a dummy Super Admin for development
+  // If no token
   if (!token) {
-    const admin = await User.findOne({ role: 'super_admin' }) || await User.findOne({ role: 'admin' });
-    if (admin) {
-        req.user = admin;
-        return next();
-    }
+    return res.status(401).json({ success: false, error: 'Not authorized to access this route' });
   }
 
   try {
@@ -25,16 +21,15 @@ exports.protect = async (req, res, next) => {
     req.user = await User.findById(decoded.id);
 
     if (!req.user) {
-      const admin = await User.findOne({ role: 'super_admin' });
-      req.user = admin;
+      return res.status(401).json({ success: false, error: 'User not found' });
     }
 
     next();
   } catch (err) {
-    // On error, still allow as fallback admin
-    const admin = await User.findOne({ role: 'super_admin' });
-    req.user = admin;
-    next();
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ success: false, error: 'Token expired', isExpired: true });
+    }
+    return res.status(401).json({ success: false, error: 'Not authorized to access this route' });
   }
 };
 

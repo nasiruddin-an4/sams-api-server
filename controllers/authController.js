@@ -126,33 +126,58 @@ exports.changePasswordFirstTime = async (req, res) => {
 
 // @desc    Refresh token
 // @route   POST /api/auth/refresh-token
-// @access  Private
+// @access  Public
 exports.refreshToken = async (req, res) => {
-  const user = await User.findById(req.user.id);
-  sendTokenResponse(user, 200, res);
+  const refreshToken = req.cookies.refreshToken;
+
+  if (!refreshToken) {
+    return res.status(401).json({ success: false, error: 'No refresh token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+    }
+
+    sendTokenResponse(user, 200, res);
+  } catch (err) {
+    return res.status(401).json({ success: false, error: 'Refresh token expired or invalid' });
+  }
 };
 
 // Helper: Get token from model, create cookie and send response
 const sendTokenResponse = (user, statusCode, res) => {
+  // Create tokens
   const token = user.getSignedJwtToken();
+  const refreshToken = user.getSignedRefreshToken();
 
-  const options = {
-    expires: new Date(
-      Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000
-    ),
+  // Access Token Cookie Options (optional, since we send in body, but good for some setups)
+  const accessTokenOptions = {
+    expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
+    httpOnly: true
+  };
+
+  // Refresh Token Cookie Options
+  const refreshTokenOptions = {
+    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
     httpOnly: true
   };
 
   if (process.env.NODE_ENV === 'production') {
-    options.secure = true;
+    accessTokenOptions.secure = true;
+    refreshTokenOptions.secure = true;
   }
 
   res
     .status(statusCode)
-    .cookie('token', token, options)
+    .cookie('token', token, accessTokenOptions)
+    .cookie('refreshToken', refreshToken, refreshTokenOptions)
     .json({
       success: true,
-      token,
+      token, // Access Token
       data: {
         _id: user._id,
         name: user.name,
@@ -170,6 +195,10 @@ const sendTokenResponse = (user, statusCode, res) => {
 // @access  Public
 exports.logout = async (req, res) => {
   res.cookie('token', 'none', {
+    expires: new Date(Date.now() + 10 * 1000),
+    httpOnly: true
+  });
+  res.cookie('refreshToken', 'none', {
     expires: new Date(Date.now() + 10 * 1000),
     httpOnly: true
   });

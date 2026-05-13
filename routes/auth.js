@@ -20,6 +20,6 @@ router.get('/me', protect, getMe);
 router.put('/update-profile', protect, updateProfile);
 router.put('/change-password', protect, changePassword);
 router.put('/first-login-password', protect, changePasswordFirstTime);
-router.post('/refresh-token', protect, refreshToken);
+router.post('/refresh-token', refreshToken);
 
 module.exports = router;
