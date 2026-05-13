@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const jwt = require('jsonwebtoken');
 
 // @desc    Register user (admin only)
 // @route   POST /api/auth/register
