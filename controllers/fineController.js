@@ -231,7 +231,7 @@ exports.waiveFine = async (req, res) => {
 };
 
 exports.deleteFine = async (req, res) => {
-  const fine = await Fine.findByIdAndDelete(req.params.id);
+  const fine = await Fine.findById(req.params.id);
   if (!fine) return res.status(404).json({ success: false, error: 'Fine not found' });
 
   if (fine.status !== 'waived') {
@@ -240,7 +240,9 @@ exports.deleteFine = async (req, res) => {
     });
   }
 
-  res.status(200).json({ success: true, data: {} });
+  await fine.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+
+  res.status(200).json({ success: true, message: 'Fine moved to trash' });
 };
 
 // @desc    Get student fines summary

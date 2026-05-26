@@ -73,4 +73,7 @@ const LabMarkSchema = new mongoose.Schema({
 LabMarkSchema.index({ student: 1, labSession: 1 }, { unique: true });
 LabMarkSchema.index({ section: 1, subject: 1 });
 
+const softDelete = require('../utils/softDelete');
+LabMarkSchema.plugin(softDelete);
+
 module.exports = mongoose.model('LabMark', LabMarkSchema);

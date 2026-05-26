@@ -110,4 +110,7 @@ const ResultSchema = new mongoose.Schema({
 ResultSchema.index({ student: 1, academicYear: 1, semester: 1 }, { unique: true });
 ResultSchema.index({ section: 1, semester: 1 });
 
+const softDelete = require('../utils/softDelete');
+ResultSchema.plugin(softDelete);
+
 module.exports = mongoose.model('Result', ResultSchema);

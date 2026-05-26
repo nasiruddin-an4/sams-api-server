@@ -21,7 +21,7 @@ const StudentSchema = new mongoose.Schema({
   },
   class: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class',
+    ref: 'Department',
     required: [true, 'Please add a class']
   },
   batch: {
@@ -78,6 +78,15 @@ const StudentSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  status: {
+    type: String,
+    enum: ['active', 'inactive', 'dropout'],
+    default: 'active'
+  },
+  dropoutRemark: {
+    type: String,
+    trim: true
+  },
   admissionDate: {
     type: Date,
     default: Date.now
@@ -113,5 +122,8 @@ const StudentSchema = new mongoose.Schema({
 
 StudentSchema.index({ class: 1, batch: 1, section: 1 });
 StudentSchema.index({ name: 'text', rollNumber: 'text', registrationNumber: 'text' });
+
+const softDelete = require('../utils/softDelete');
+StudentSchema.plugin(softDelete);
 
 module.exports = mongoose.model('Student', StudentSchema);

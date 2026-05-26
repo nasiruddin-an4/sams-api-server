@@ -14,7 +14,7 @@ const ExamMarkSchema = new mongoose.Schema({
   },
   class: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class',
+    ref: 'Department',
     required: true
   },
   batch: {
@@ -106,5 +106,8 @@ ExamMarkSchema.methods.calculateGrade = function () {
 
 ExamMarkSchema.index({ student: 1, subject: 1, examType: 1, semester: 1 }, { unique: true });
 ExamMarkSchema.index({ section: 1, subject: 1, examType: 1 });
+
+const softDelete = require('../utils/softDelete');
+ExamMarkSchema.plugin(softDelete);
 
 module.exports = mongoose.model('ExamMark', ExamMarkSchema);

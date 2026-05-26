@@ -15,10 +15,49 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 const connectDB = require('./config/db');
 connectDB();
 
+// Ensure Super Admin exists on boot
+const User = require('./models/User');
+const ensureSuperAdmin = async () => {
+  try {
+    const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@diit.edu.bd';
+    const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'admin123';
+    const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
+
+    let admin = await User.findOne({ 
+      $or: [
+        { role: 'super_admin' },
+        { email: adminEmail }
+      ]
+    });
+
+    if (!admin) {
+      await User.create({
+        name: adminName,
+        email: adminEmail,
+        password: adminPassword,
+        role: 'super_admin',
+        phone: '01700000000',
+        isActive: true
+      });
+      console.log(`✅ Default Super Admin auto-created: ${adminEmail}`);
+    } else {
+      if (admin.role !== 'super_admin' || !admin.isActive) {
+        admin.role = 'super_admin';
+        admin.isActive = true;
+        await admin.save();
+        console.log(`⚡ Super Admin status restored: ${admin.email}`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Failed to ensure Super Admin exists:', error.message);
+  }
+};
+ensureSuperAdmin();
+
 // Route files
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
-const classRoutes = require('./routes/classes');
+const departmentRoutes = require('./routes/departments');
 const batchRoutes = require('./routes/batches');
 const sectionRoutes = require('./routes/sections');
 const subjectRoutes = require('./routes/subjects');
@@ -35,6 +74,9 @@ const calendarRoutes = require('./routes/calendar');
 const notificationRoutes = require('./routes/notifications');
 const syncRoutes = require('./routes/sync');
 const csvRoutes = require('./routes/csv');
+const assignmentRoutes = require('./routes/assignments');
+const myRoutes = require('./routes/my');
+const trashRoutes = require('./routes/trash');
 
 // Middleware files
 const errorHandler = require('./middleware/errorHandler');
@@ -61,13 +103,23 @@ app.use(cors({
   credentials: true
 }));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 500,
-  message: { success: false, error: 'Too many requests, please try again later' }
-});
-app.use('/api', limiter);
+// Rate limiting (skip in development to avoid 429 errors during local dev)
+if (process.env.NODE_ENV !== 'development') {
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000,
+    message: { success: false, error: 'Too many requests, please try again later' }
+  });
+  app.use('/api', limiter);
+
+  // Stricter rate limit for auth routes in production
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 15,
+    message: { success: false, error: 'Too many login attempts, please try again later' }
+  });
+  app.use('/api/auth/login', authLimiter);
+}
 
 // Dev logging middleware
 if (process.env.NODE_ENV === 'development') {
@@ -77,7 +129,7 @@ if (process.env.NODE_ENV === 'development') {
 // Mount routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/classes', classRoutes);
+app.use('/api/departments', departmentRoutes);
 app.use('/api/batches', batchRoutes);
 app.use('/api/sections', sectionRoutes);
 app.use('/api/subjects', subjectRoutes);
@@ -94,6 +146,9 @@ app.use('/api/calendar', calendarRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/csv', csvRoutes);
+app.use('/api/assignments', assignmentRoutes);
+app.use('/api/my', myRoutes);
+app.use('/api/trash', trashRoutes);
 app.use('/api/upload', require('./routes/upload'));
 
 // Create uploads directory if it doesn't exist
@@ -112,6 +167,9 @@ app.use(notFound);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
+
+const { initScheduler } = require('./services/cron');
+initScheduler();
 
 const server = app.listen(PORT, () => {
   console.log(`🚀 SAMS Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);

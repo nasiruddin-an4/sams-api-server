@@ -12,10 +12,14 @@ const SectionSchema = new mongoose.Schema({
     ref: 'Batch',
     required: [true, 'Please add a batch']
   },
-  class: {
+  department: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class',
-    required: [true, 'Please add a class']
+    ref: 'Department',
+    required: [true, 'Please add a department']
+  },
+  semester: {
+    type: String,
+    required: [true, 'Please add a semester']
   },
   teacher: {
     type: mongoose.Schema.Types.ObjectId,
@@ -23,6 +27,7 @@ const SectionSchema = new mongoose.Schema({
   },
   capacity: {
     type: Number,
+    required: [true, 'Please add a capacity'],
     default: 60
   },
   isActive: {
@@ -46,6 +51,9 @@ SectionSchema.virtual('students', {
   justOne: false
 });
 
-SectionSchema.index({ name: 1, batch: 1, class: 1 }, { unique: true });
+SectionSchema.index({ name: 1, batch: 1, department: 1 }, { unique: true });
+
+const softDelete = require('../utils/softDelete');
+SectionSchema.plugin(softDelete);
 
 module.exports = mongoose.model('Section', SectionSchema);

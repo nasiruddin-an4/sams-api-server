@@ -1,14 +1,89 @@
 const Student = require('../models/Student');
 const Teacher = require('../models/User'); // Role: teacher
-const Class = require('../models/Class');
 const Section = require('../models/Section');
 const Attendance = require('../models/Attendance');
 const Fine = require('../models/Fine');
 const ExamMark = require('../models/ExamMark');
+const Class = require('../models/Department');
+const mongoose = require('mongoose');
 
 // @desc    Get dashboard statistics overview
 // @route   GET /api/dashboard/stats
 exports.getDashboardStats = async (req, res) => {
+  // Teacher-specific stats
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id });
+    const assignedSectionIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    const uniqueSectionIds = [...new Set(assignedSectionIds)].map(id => new mongoose.Types.ObjectId(id));
+
+    const totalStudents = await Student.countDocuments({ section: { $in: uniqueSectionIds }, isActive: true });
+    
+    // Schedule
+    const populatedAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id, isActive: true })
+      .populate('section', 'name')
+      .populate('subject', 'name code type');
+    
+    const schedule = populatedAssignments.map(a => ({
+      section: a.section?.name,
+      subject: a.subject?.name,
+      code: a.subject?.code,
+      type: a.subject?.type
+    }));
+
+    // Pending attendance count
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const markedToday = await Attendance.find({
+      date: today,
+      section: { $in: uniqueSectionIds }
+    });
+    
+    let pendingAttendanceCount = 0;
+    for (const assign of populatedAssignments) {
+      const isMarked = markedToday.some(att => 
+        att.section.toString() === assign.section?._id?.toString() && 
+        att.subject?.toString() === assign.subject?._id?.toString()
+      );
+      if (!isMarked) {
+        pendingAttendanceCount++;
+      }
+    }
+
+    // Low attendance alerts count
+    const lowAttendanceStudents = await Attendance.aggregate([
+      { $match: { section: { $in: uniqueSectionIds } } },
+      { $unwind: '$records' },
+      {
+        $group: {
+          _id: '$records.student',
+          totalDays: { $sum: 1 },
+          present: { $sum: { $cond: [{ $in: ['$records.status', ['present', 'late']] }, 1, 0] } }
+        }
+      },
+      {
+        $project: {
+          percentage: { $multiply: [{ $divide: ['$present', '$totalDays'] }, 100] }
+        }
+      },
+      { $match: { percentage: { $lt: 75 } } }
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        isTeacher: true,
+        totalStudents,
+        pendingAttendanceCount,
+        schedule,
+        lowAttendanceCount: lowAttendanceStudents.length
+      }
+    });
+  }
+
   const totalStudents = await Student.countDocuments({ isActive: true });
   const totalTeachers = await Teacher.countDocuments({ role: 'teacher', isActive: true });
   const totalClasses = await Class.countDocuments({ isActive: true });

@@ -50,4 +50,7 @@ const ClassTestSchema = new mongoose.Schema({
 ClassTestSchema.index({ student: 1, testSeries: 1 }, { unique: true });
 ClassTestSchema.index({ section: 1, subject: 1 });
 
+const softDelete = require('../utils/softDelete');
+ClassTestSchema.plugin(softDelete);
+
 module.exports = mongoose.model('ClassTest', ClassTestSchema);

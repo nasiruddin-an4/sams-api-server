@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Student = require('../models/Student');
 const jwt = require('jsonwebtoken');
 
 // @desc    Register user (admin only)
@@ -24,11 +25,11 @@ exports.register = async (req, res) => {
 // @route   POST /api/auth/login
 // @access  Public
 exports.login = async (req, res) => {
-  const { email, username, password } = req.body;
-  const loginId = email || username;
+  const { email, username, studentId, password } = req.body;
+  const loginId = email || username || studentId;
 
   if (!loginId || !password) {
-    return res.status(400).json({ success: false, error: 'Please provide an email/registration number and password' });
+    return res.status(400).json({ success: false, error: 'Please provide an email/student ID and password' });
   }
 
   const user = await User.findOne({ 
@@ -65,9 +66,46 @@ exports.login = async (req, res) => {
 exports.getMe = async (req, res) => {
   const user = await User.findById(req.user.id)
     .populate('assignedClasses', 'name')
-    .populate('assignedSections', 'name');
+    .populate({
+      path: 'assignedSections',
+      select: 'name semester department batch',
+      populate: [
+        { path: 'department', select: 'name' },
+        { path: 'batch', select: 'name' }
+      ]
+    })
+    .populate('linkedStudentId');
 
-  res.status(200).json({ success: true, data: user });
+  const userData = user.toObject();
+
+  // If student, include linked student profile details
+  if (user.role === 'student') {
+    const student = await Student.findOne({
+      $or: [
+        { userId: user._id },
+        { rollNumber: user.registrationNumber }
+      ]
+    })
+      .populate('class', 'name code')
+      .populate('batch', 'name year')
+      .populate('section', 'name');
+
+    if (student) {
+      userData.studentProfile = {
+        _id: student._id,
+        name: student.name,
+        rollNumber: student.rollNumber,
+        department: student.class,
+        batch: student.batch,
+        section: student.section,
+        semester: student.semester,
+        cgpa: student.cgpa,
+        photo: student.photo
+      };
+    }
+  }
+
+  res.status(200).json({ success: true, data: userData });
 };
 
 // @desc    Update user profile
@@ -103,6 +141,8 @@ exports.changePassword = async (req, res) => {
   }
 
   user.password = req.body.newPassword;
+  user.isFirstLogin = false;
+  user.passwordChangedAt = new Date();
   await user.save();
 
   sendTokenResponse(user, 200, res);
@@ -120,6 +160,7 @@ exports.changePasswordFirstTime = async (req, res) => {
 
   user.password = req.body.newPassword;
   user.isFirstLogin = false;
+  user.passwordChangedAt = new Date();
   await user.save();
 
   sendTokenResponse(user, 200, res);
@@ -186,6 +227,7 @@ const sendTokenResponse = (user, statusCode, res) => {
         registrationNumber: user.registrationNumber,
         role: user.role,
         phone: user.phone,
+        linkedStudentId: user.linkedStudentId || undefined,
         mustChangePassword: user.isFirstLogin === true ? true : undefined
       }
     });

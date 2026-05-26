@@ -23,7 +23,7 @@ const AttendanceSchema = new mongoose.Schema({
   },
   class: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class',
+    ref: 'Department',
     required: true
   },
   batch: {
@@ -50,6 +50,10 @@ const AttendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isDraft: {
+    type: Boolean,
+    default: true
+  },
   notes: String
 }, {
   timestamps: true
@@ -68,5 +72,8 @@ AttendanceSchema.pre('save', function (next) {
 AttendanceSchema.index({ date: 1, section: 1, subject: 1 }, { unique: true });
 AttendanceSchema.index({ date: 1, class: 1 });
 AttendanceSchema.index({ 'records.student': 1, date: 1 });
+
+const softDelete = require('../utils/softDelete');
+AttendanceSchema.plugin(softDelete);
 
 module.exports = mongoose.model('Attendance', AttendanceSchema);

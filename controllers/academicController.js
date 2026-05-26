@@ -1,56 +1,28 @@
-const Class = require('../models/Class');
+
 const Batch = require('../models/Batch');
 const Section = require('../models/Section');
 const Subject = require('../models/Subject');
 const AcademicCalendar = require('../models/AcademicCalendar');
 
-// ==================== CLASSES ====================
-
-// @desc    Get all classes
-exports.getClasses = async (req, res) => {
-  const classes = await Class.find().populate('batches').sort('name');
-  res.status(200).json({ success: true, count: classes.length, data: classes });
-};
-
-// @desc    Get single class
-exports.getClass = async (req, res) => {
-  const cls = await Class.findById(req.params.id).populate('batches').populate('sections');
-  if (!cls) return res.status(404).json({ success: false, error: 'Class not found' });
-  res.status(200).json({ success: true, data: cls });
-};
-
-// @desc    Create class
-exports.createClass = async (req, res) => {
-  req.body.createdBy = req.user.id;
-  const cls = await Class.create(req.body);
-  res.status(201).json({ success: true, data: cls });
-};
-
-// @desc    Update class
-exports.updateClass = async (req, res) => {
-  const cls = await Class.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-  if (!cls) return res.status(404).json({ success: false, error: 'Class not found' });
-  res.status(200).json({ success: true, data: cls });
-};
-
-// @desc    Delete class
-exports.deleteClass = async (req, res) => {
-  const cls = await Class.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
-  if (!cls) return res.status(404).json({ success: false, error: 'Class not found' });
-  res.status(200).json({ success: true, data: cls });
-};
-
 // ==================== BATCHES ====================
 
 exports.getBatches = async (req, res) => {
   const filter = {};
-  if (req.query.classId) filter.class = req.query.classId;
-  const batches = await Batch.find(filter).populate('class', 'name').populate('sections').sort('-year');
+  if (req.query.departmentId) filter.department = req.query.departmentId;
+
+  // Teachers can only see batches that contain their assigned sections
+  if (req.user.role === 'teacher') {
+    const sections = await Section.find({ _id: { $in: req.user.assignedSections } }).select('batch');
+    const batchIds = [...new Set(sections.map(s => s.batch.toString()))];
+    filter._id = { $in: batchIds };
+  }
+
+  const batches = await Batch.find(filter).populate('department', 'name').populate('sections').sort('-year');
   res.status(200).json({ success: true, count: batches.length, data: batches });
 };
 
 exports.getBatch = async (req, res) => {
-  const batch = await Batch.findById(req.params.id).populate('class', 'name').populate('sections');
+  const batch = await Batch.findById(req.params.id).populate('department', 'name').populate('sections');
   if (!batch) return res.status(404).json({ success: false, error: 'Batch not found' });
   res.status(200).json({ success: true, data: batch });
 };
@@ -68,16 +40,18 @@ exports.updateBatch = async (req, res) => {
 };
 
 exports.deleteBatch = async (req, res) => {
-  const batch = await Batch.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+  const batch = await Batch.findById(req.params.id);
   if (!batch) return res.status(404).json({ success: false, error: 'Batch not found' });
-  res.status(200).json({ success: true, data: batch });
+  await batch.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, data: batch, message: 'Batch moved to trash' });
 };
 
 // ==================== SECTIONS ====================
 
 exports.getSections = async (req, res) => {
   const filter = {};
-  if (req.query.classId) filter.class = req.query.classId;
+  if (req.query.departmentId) filter.department = req.query.departmentId;
+  else if (req.query.classId) filter.department = req.query.classId;
   if (req.query.batchId) filter.batch = req.query.batchId;
 
   // Teachers can only see assigned sections
@@ -86,7 +60,7 @@ exports.getSections = async (req, res) => {
   }
 
   const sections = await Section.find(filter)
-    .populate('class', 'name')
+    .populate('department', 'name')
     .populate('batch', 'name year')
     .populate('teacher', 'name email')
     .sort('name');
@@ -96,7 +70,7 @@ exports.getSections = async (req, res) => {
 
 exports.getSection = async (req, res) => {
   const section = await Section.findById(req.params.id)
-    .populate('class', 'name')
+    .populate('department', 'name')
     .populate('batch', 'name year')
     .populate('teacher', 'name email')
     .populate('students');
@@ -117,28 +91,37 @@ exports.updateSection = async (req, res) => {
 };
 
 exports.deleteSection = async (req, res) => {
-  const section = await Section.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+  const section = await Section.findById(req.params.id);
   if (!section) return res.status(404).json({ success: false, error: 'Section not found' });
-  res.status(200).json({ success: true, data: section });
+  await section.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, data: section, message: 'Section moved to trash' });
 };
 
 // ==================== SUBJECTS ====================
 
 exports.getSubjects = async (req, res) => {
   const filter = {};
-  if (req.query.classId) filter.class = req.query.classId;
+  if (req.query.departmentId) filter.department = req.query.departmentId;
+  else if (req.query.classId) filter.department = req.query.classId;
   if (req.query.type) filter.type = req.query.type;
+
+  // Teachers can only see subjects they are assigned to
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const assignments = await SectionSubjectTeacher.find({ teacher: req.user.id, isActive: true });
+    const subjectIds = [...new Set(assignments.map(a => a.subject.toString()))];
+    filter._id = { $in: subjectIds };
+  }
+  
   const subjects = await Subject.find(filter)
-    .populate('class', 'name')
-    .populate('teacher', 'name email')
+    .populate('department', 'name')
     .sort('code');
   res.status(200).json({ success: true, count: subjects.length, data: subjects });
 };
 
 exports.getSubject = async (req, res) => {
   const subject = await Subject.findById(req.params.id)
-    .populate('class', 'name')
-    .populate('teacher', 'name email');
+    .populate('department', 'name');
   if (!subject) return res.status(404).json({ success: false, error: 'Subject not found' });
   res.status(200).json({ success: true, data: subject });
 };
@@ -155,9 +138,10 @@ exports.updateSubject = async (req, res) => {
 };
 
 exports.deleteSubject = async (req, res) => {
-  const subject = await Subject.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+  const subject = await Subject.findById(req.params.id);
   if (!subject) return res.status(404).json({ success: false, error: 'Subject not found' });
-  res.status(200).json({ success: true, data: subject });
+  await subject.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, data: subject, message: 'Subject moved to trash' });
 };
 
 // ==================== ACADEMIC CALENDAR ====================

@@ -7,13 +7,16 @@ const {
   getTodayAttendance,
   getSectionAttendanceSummary,
   deleteAttendance,
-  bulkMarkHoliday
+  bulkMarkHoliday,
+  getTeacherDashboard
 } = require('../controllers/attendanceController');
 const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
 router.use(protect);
+
+router.get('/teacher-dashboard', authorize('teacher'), getTeacherDashboard);
 
 router.post('/mark', authorize('admin', 'teacher'), markAttendance);
 router.post('/bulk-holiday', authorize('admin'), bulkMarkHoliday);

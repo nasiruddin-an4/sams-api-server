@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Student = require('../models/Student');
 
 // Protect routes — verify JWT token (BYPASSED FOR DEV)
 exports.protect = async (req, res, next) => {
@@ -51,3 +52,54 @@ exports.authorize = (...roles) => {
     next();
   };
 };
+
+// Block users who haven't changed their first-login password
+// Exempt: password-change endpoints themselves
+exports.requirePasswordChange = (req, res, next) => {
+  if (req.user.isFirstLogin === true) {
+    return res.status(403).json({
+      success: false,
+      code: 'CHANGE_PASSWORD',
+      error: 'You must change your password before accessing this resource'
+    });
+  }
+  next();
+};
+
+// Attach the linked Student document ID for data isolation
+// Use after protect + authorize('student')
+exports.attachStudentId = async (req, res, next) => {
+  try {
+    let studentId = req.user.linkedStudentId;
+
+    // Fallback: look up by registrationNumber if linkedStudentId not set
+    if (!studentId) {
+      const student = await Student.findOne({
+        $or: [
+          { userId: req.user._id },
+          { rollNumber: req.user.registrationNumber }
+        ]
+      });
+
+      if (student) {
+        studentId = student._id;
+        // Auto-heal: set linkedStudentId on User for future lookups
+        req.user.linkedStudentId = studentId;
+        await User.findByIdAndUpdate(req.user._id, { linkedStudentId: studentId });
+      }
+    }
+
+    if (!studentId) {
+      return res.status(404).json({
+        success: false,
+        error: 'No linked student profile found for this account'
+      });
+    }
+
+    req.studentId = studentId;
+    next();
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'Error resolving student profile' });
+  }
+};
+

@@ -5,6 +5,8 @@ const Fine = require('../models/Fine');
 const Result = require('../models/Result');
 const User = require('../models/User');
 const mongoose = require('mongoose');
+const { generatePassword } = require('../utils/passwordGenerator');
+const { sendWelcomeEmail } = require('../config/email');
 
 // @desc    Get all students
 // @route   GET /api/students
@@ -14,7 +16,6 @@ exports.getStudents = async (req, res) => {
 
   if (classId) query.class = classId;
   if (batchId) query.batch = batchId;
-  if (sectionId) query.section = sectionId;
   if (gender) query.gender = gender;
   if (isActive !== undefined) query.isActive = isActive === 'true';
   if (semester) query.semester = parseInt(semester);
@@ -28,9 +29,26 @@ exports.getStudents = async (req, res) => {
     ];
   }
 
-  // Teacher can only see assigned sections
+  // Teacher can only see assigned sections (direct + SectionSubjectTeacher)
   if (req.user.role === 'teacher') {
-    query.section = { $in: req.user.assignedSections };
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    const uniqueSectionIds = [...new Set(assignedIds)];
+
+    if (sectionId) {
+      if (!uniqueSectionIds.includes(sectionId.toString())) {
+        return res.status(403).json({ success: false, error: 'Not authorized to view this section' });
+      }
+      query.section = sectionId;
+    } else {
+      query.section = { $in: uniqueSectionIds };
+    }
+  } else if (sectionId) {
+    query.section = sectionId;
   }
 
   // Parent can only see own child
@@ -47,13 +65,27 @@ exports.getStudents = async (req, res) => {
     .limit(parseInt(limit))
     .sort('rollNumber');
 
+  // Sanitize personal info for teacher
+  let data = students;
+  if (req.user.role === 'teacher') {
+    data = students.map(s => {
+      const obj = s.toObject();
+      delete obj.phone;
+      delete obj.email;
+      delete obj.address;
+      delete obj.parentInfo;
+      delete obj.parentUserId;
+      return obj;
+    });
+  }
+
   res.status(200).json({
     success: true,
-    count: students.length,
+    count: data.length,
     total,
     totalPages: Math.ceil(total / limit),
     currentPage: parseInt(page),
-    data: students
+    data
   });
 };
 
@@ -73,50 +105,137 @@ exports.getStudent = async (req, res) => {
     return res.status(403).json({ success: false, error: 'Not authorized' });
   }
 
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    const uniqueSectionIds = [...new Set(assignedIds)];
+
+    if (!uniqueSectionIds.includes(student.section?._id?.toString() || student.section?.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized to view this student profile' });
+    }
+
+    // Sanitize personal info
+    const sanitizedStudent = student.toObject();
+    delete sanitizedStudent.phone;
+    delete sanitizedStudent.email;
+    delete sanitizedStudent.address;
+    delete sanitizedStudent.parentInfo;
+    delete sanitizedStudent.parentUserId;
+    
+    return res.status(200).json({ success: true, data: sanitizedStudent });
+  }
+
   res.status(200).json({ success: true, data: student });
 };
 
 // @desc    Create student
 // @route   POST /api/students
 exports.createStudent = async (req, res) => {
-  // Create user account for student if registration number provided
-  let userId;
-  if (req.body.registrationNumber) {
-    const user = await User.create({
-      name: req.body.name,
-      registrationNumber: req.body.registrationNumber,
-      password: req.body.registrationNumber, // Default password
-      role: 'student',
-      email: req.body.email || undefined,
-      phone: req.body.phone
-    });
-    userId = user._id;
+  const studentData = { ...req.body };
+  if (studentData.status) {
+    studentData.isActive = studentData.status === 'active';
   }
 
-  const studentData = { ...req.body };
-  if (userId) studentData.userId = userId;
+  // Create user account for student if registration number provided
+  let userId;
+  let user;
+  let generatedPassword;
+  
+  if (req.body.registrationNumber) {
+    generatedPassword = generatePassword(req.body.name);
+    user = await User.create({
+      name: req.body.name,
+      registrationNumber: req.body.registrationNumber,
+      password: generatedPassword, 
+      role: 'student',
+      email: req.body.email || undefined,
+      phone: req.body.phone,
+      isFirstLogin: true,
+      emailSent: false
+    });
+    userId = user._id;
+    studentData.userId = userId;
+  }
 
   const student = await Student.create(studentData);
+
+  // Link user back to student and send email
+  if (user && req.body.email) {
+    user.linkedStudentId = student._id;
+    await user.save();
+
+    // Send email asynchronously without blocking the request
+    sendWelcomeEmail({
+      name: student.name,
+      email: student.email,
+      studentId: student.rollNumber || student.registrationNumber,
+      password: generatedPassword
+    }).then(async (emailResult) => {
+      if (emailResult.sent) {
+        await User.findByIdAndUpdate(user._id, { 
+          emailSent: true,
+          welcomeEmailSentAt: new Date()
+        });
+      }
+    }).catch(err => console.error("Error sending welcome email in createStudent:", err));
+  }
+
   res.status(201).json({ success: true, data: student });
 };
 
 // @desc    Update student
 // @route   PUT /api/students/:id
 exports.updateStudent = async (req, res) => {
-  const student = await Student.findByIdAndUpdate(req.params.id, req.body, {
+  const updateData = { ...req.body };
+  if (updateData.status) {
+    updateData.isActive = updateData.status === 'active';
+  }
+
+  const student = await Student.findByIdAndUpdate(req.params.id, updateData, {
     new: true,
     runValidators: true
   });
   if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+
+  // Sync linked User isActive state
+  if (student.userId && updateData.status) {
+    await User.findByIdAndUpdate(student.userId, { 
+      isActive: student.isActive 
+    });
+  }
+
   res.status(200).json({ success: true, data: student });
 };
 
-// @desc    Delete student (soft)
+// @desc    Delete student (soft delete)
 // @route   DELETE /api/students/:id
 exports.deleteStudent = async (req, res) => {
-  const student = await Student.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+  const student = await Student.findById(req.params.id);
   if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
-  res.status(200).json({ success: true, data: student, message: 'Student deactivated' });
+
+  // Soft delete linked User account if exists
+  if (student.userId) {
+    const user = await User.findById(student.userId);
+    if (user) {
+      user.isActive = false;
+      await user.softDelete(req.user.id, req.body.reason || 'Associated student deleted');
+    }
+  } else if (student.email) {
+    // Fallback search by email
+    const user = await User.findOne({ email: student.email.toLowerCase() });
+    if (user) {
+      user.isActive = false;
+      await user.softDelete(req.user.id, req.body.reason || 'Associated student deleted');
+    }
+  }
+
+  await student.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, message: 'Student moved to trash and linked user account deactivated' });
 };
 
 // @desc    Bulk create students

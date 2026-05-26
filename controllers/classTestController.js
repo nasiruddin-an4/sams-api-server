@@ -8,9 +8,30 @@ exports.getTestSeries = async (req, res) => {
   const { subjectId, sectionId, academicYear, semester, page = 1, limit = 20 } = req.query;
   const query = {};
   if (subjectId) query.subject = subjectId;
-  if (sectionId) query.section = sectionId;
   if (academicYear) query.academicYear = academicYear;
   if (semester) query.semester = parseInt(semester);
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id });
+    const assignedSectionIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    const uniqueSectionIds = [...new Set(assignedSectionIds)];
+
+    if (sectionId) {
+      if (!uniqueSectionIds.includes(sectionId.toString())) {
+        return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+      }
+      query.section = sectionId;
+    } else {
+      query.section = { $in: uniqueSectionIds };
+    }
+  } else if (sectionId) {
+    query.section = sectionId;
+  }
 
   const total = await TestSeries.countDocuments(query);
   const series = await TestSeries.find(query)
@@ -34,25 +55,81 @@ exports.getTestSeriesById = async (req, res) => {
     .populate('section', 'name')
     .populate('teacher', 'name');
   if (!series) return res.status(404).json({ success: false, error: 'Test series not found' });
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(series.section?._id?.toString() || series.section?.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized to view this test series' });
+    }
+  }
+
   res.status(200).json({ success: true, data: series });
 };
 
 exports.createTestSeries = async (req, res) => {
+  const { section, subject } = req.body;
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const hasAssignment = await SectionSubjectTeacher.findOne({
+      section,
+      subject,
+      teacher: req.user.id
+    });
+    const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(section.toString());
+
+    if (!hasAssignment && !isDirectSection) {
+      return res.status(403).json({ success: false, error: 'Not authorized to create a test series for this section and subject' });
+    }
+  }
+
   const series = await TestSeries.create(req.body);
   res.status(201).json({ success: true, data: series });
 };
 
 exports.updateTestSeries = async (req, res) => {
-  const series = await TestSeries.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  const series = await TestSeries.findById(req.params.id);
   if (!series) return res.status(404).json({ success: false, error: 'Test series not found' });
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const hasAssignment = await SectionSubjectTeacher.findOne({
+      section: series.section,
+      subject: series.subject,
+      teacher: req.user.id
+    });
+    const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(series.section.toString());
+
+    if (!hasAssignment && !isDirectSection) {
+      return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+    }
+  }
+
+  Object.assign(series, req.body);
+  await series.save();
   res.status(200).json({ success: true, data: series });
 };
 
 exports.deleteTestSeries = async (req, res) => {
-  const series = await TestSeries.findByIdAndDelete(req.params.id);
+  const series = await TestSeries.findById(req.params.id);
   if (!series) return res.status(404).json({ success: false, error: 'Test series not found' });
-  await ClassTest.deleteMany({ testSeries: req.params.id });
-  res.status(200).json({ success: true, data: {} });
+  
+  // Soft delete all marks in series
+  const marks = await ClassTest.find({ testSeries: req.params.id });
+  for (const mark of marks) {
+    await mark.softDelete(req.user.id, 'Parent test series deleted');
+  }
+
+  await series.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, message: 'Test series and marks moved to trash' });
 };
 
 // ==================== CLASS TEST MARKS ====================
@@ -61,8 +138,29 @@ exports.getClassTestMarks = async (req, res) => {
   const { testSeriesId, sectionId, studentId, page = 1, limit = 50 } = req.query;
   const query = {};
   if (testSeriesId) query.testSeries = testSeriesId;
-  if (sectionId) query.section = sectionId;
   if (studentId) query.student = studentId;
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    const uniqueSectionIds = [...new Set(assignedIds)];
+
+    if (sectionId) {
+      if (!uniqueSectionIds.includes(sectionId.toString())) {
+        return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+      }
+      query.section = sectionId;
+    } else {
+      query.section = { $in: uniqueSectionIds };
+    }
+  } else if (sectionId) {
+    query.section = sectionId;
+  }
 
   const total = await ClassTest.countDocuments(query);
   const marks = await ClassTest.find(query)
@@ -92,6 +190,23 @@ exports.getClassTestMarkById = async (req, res) => {
 };
 
 exports.createClassTestMark = async (req, res) => {
+  const { section, subject } = req.body;
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const hasAssignment = await SectionSubjectTeacher.findOne({
+      section,
+      subject,
+      teacher: req.user.id
+    });
+    const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(section.toString());
+
+    if (!hasAssignment && !isDirectSection) {
+      return res.status(403).json({ success: false, error: 'Not authorized to enter class test marks for this section' });
+    }
+  }
+
   req.body.enteredBy = req.user.id;
   const mark = await ClassTest.create(req.body);
   res.status(201).json({ success: true, data: mark });
@@ -101,6 +216,24 @@ exports.bulkCreateClassTestMarks = async (req, res) => {
   const { marks } = req.body;
   if (!marks || !Array.isArray(marks)) {
     return res.status(400).json({ success: false, error: 'Please provide an array of marks' });
+  }
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const firstMark = marks[0];
+    if (firstMark) {
+      const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+      const hasAssignment = await SectionSubjectTeacher.findOne({
+        section: firstMark.section,
+        subject: firstMark.subject,
+        teacher: req.user.id
+      });
+      const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(firstMark.section.toString());
+
+      if (!hasAssignment && !isDirectSection) {
+        return res.status(403).json({ success: false, error: 'Not authorized to enter class test marks for this section' });
+      }
+    }
   }
 
   const marksWithUser = marks.map(m => ({ ...m, enteredBy: req.user.id }));
@@ -125,15 +258,37 @@ exports.bulkCreateClassTestMarks = async (req, res) => {
 };
 
 exports.updateClassTestMark = async (req, res) => {
-  const mark = await ClassTest.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  const mark = await ClassTest.findById(req.params.id);
   if (!mark) return res.status(404).json({ success: false, error: 'Class test mark not found' });
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    if (mark.enteredBy && mark.enteredBy.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Not authorized to edit marks entered by another teacher' });
+    }
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const hasAssignment = await SectionSubjectTeacher.findOne({
+      section: mark.section,
+      subject: mark.subject,
+      teacher: req.user.id
+    });
+    const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(mark.section.toString());
+
+    if (!hasAssignment && !isDirectSection) {
+      return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+    }
+  }
+
+  Object.assign(mark, req.body);
+  await mark.save();
   res.status(200).json({ success: true, data: mark });
 };
 
 exports.deleteClassTestMark = async (req, res) => {
-  const mark = await ClassTest.findByIdAndDelete(req.params.id);
+  const mark = await ClassTest.findById(req.params.id);
   if (!mark) return res.status(404).json({ success: false, error: 'Class test mark not found' });
-  res.status(200).json({ success: true, data: {} });
+  await mark.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, message: 'Class test mark moved to trash' });
 };
 
 // @desc    Get class test summary per student (with best-of-N logic)
@@ -141,6 +296,19 @@ exports.deleteClassTestMark = async (req, res) => {
 exports.getClassTestSummary = async (req, res) => {
   const sectionId = new mongoose.Types.ObjectId(req.params.sectionId);
   const { subjectId } = req.query;
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(req.params.sectionId.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+    }
+  }
 
   const matchStage = { section: sectionId };
   if (subjectId) matchStage.subject = new mongoose.Types.ObjectId(subjectId);

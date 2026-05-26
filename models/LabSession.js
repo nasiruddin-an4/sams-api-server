@@ -52,4 +52,7 @@ const LabSessionSchema = new mongoose.Schema({
 
 LabSessionSchema.index({ subject: 1, section: 1, sessionDate: 1 });
 
+const softDelete = require('../utils/softDelete');
+LabSessionSchema.plugin(softDelete);
+
 module.exports = mongoose.model('LabSession', LabSessionSchema);

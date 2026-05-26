@@ -187,6 +187,11 @@ exports.getResults = async (req, res) => {
     query.student = { $in: children.map(c => c._id) };
   }
 
+  // Teacher: only their assigned sections
+  if (req.user.role === 'teacher') {
+    query.section = { $in: req.user.assignedSections };
+  }
+
   const total = await Result.countDocuments(query);
   const results = await Result.find(query)
     .populate('student', 'name rollNumber registrationNumber program')

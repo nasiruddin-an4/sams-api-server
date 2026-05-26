@@ -7,7 +7,30 @@ const { enqueueNotification } = require('../services/queueService');
 // @desc    Mark attendance (upsert by date+section+subject)
 // @route   POST /api/attendance/mark
 exports.markAttendance = async (req, res) => {
-  const { date, classId, batchId, sectionId, subjectId, records, isHoliday, notes } = req.body;
+  const { date, classId, batchId, sectionId, subjectId, records, isHoliday, notes, isDraft } = req.body;
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    // 1. Verify section assignment
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(sectionId.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized: You are not assigned to this section' });
+    }
+
+    // 2. Verify date is today
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const requestDate = new Date(date);
+    requestDate.setUTCHours(0, 0, 0, 0);
+    if (requestDate.getTime() !== today.getTime()) {
+      return res.status(403).json({ success: false, error: 'Not authorized: Teachers can only mark today\'s attendance' });
+    }
+  }
 
   const attendanceDate = new Date(date);
   attendanceDate.setUTCHours(0, 0, 0, 0);
@@ -18,9 +41,21 @@ exports.markAttendance = async (req, res) => {
   let attendance = await Attendance.findOne(filter);
 
   if (attendance) {
+    // If it already exists, and we are editing, check the date is today for teachers
+    if (req.user.role === 'teacher') {
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      const attendanceDateCheck = new Date(attendance.date);
+      attendanceDateCheck.setUTCHours(0, 0, 0, 0);
+      if (attendanceDateCheck.getTime() !== today.getTime()) {
+        return res.status(403).json({ success: false, error: 'Not authorized: Teachers can only edit today\'s attendance' });
+      }
+    }
+    
     attendance.records = records;
     attendance.isHoliday = isHoliday || false;
     attendance.notes = notes;
+    attendance.isDraft = isDraft !== undefined ? isDraft : false;
     attendance.markedBy = req.user.id;
     await attendance.save();
   } else {
@@ -33,6 +68,7 @@ exports.markAttendance = async (req, res) => {
       markedBy: req.user.id,
       records,
       isHoliday: isHoliday || false,
+      isDraft: isDraft !== undefined ? isDraft : false,
       notes
     });
   }
@@ -69,7 +105,6 @@ exports.getAttendance = async (req, res) => {
   const { sectionId, classId, batchId, date, from, to, subjectId, page = 1, limit = 20 } = req.query;
   const query = {};
 
-  if (sectionId) query.section = sectionId;
   if (classId) query.class = classId;
   if (batchId) query.batch = batchId;
   if (subjectId) query.subject = subjectId;
@@ -84,9 +119,26 @@ exports.getAttendance = async (req, res) => {
     if (to) query.date.$lte = new Date(to);
   }
 
-  // Teacher: only assigned sections
+  // Teacher check
   if (req.user.role === 'teacher') {
-    query.section = { $in: req.user.assignedSections };
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    const uniqueSectionIds = [...new Set(assignedIds)];
+
+    if (sectionId) {
+      if (!uniqueSectionIds.includes(sectionId.toString())) {
+        return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+      }
+      query.section = sectionId;
+    } else {
+      query.section = { $in: uniqueSectionIds };
+    }
+  } else if (sectionId) {
+    query.section = sectionId;
   }
 
   const total = await Attendance.countDocuments(query);
@@ -120,6 +172,20 @@ exports.getAttendanceById = async (req, res) => {
     .populate('records.student', 'name rollNumber photo');
 
   if (!attendance) return res.status(404).json({ success: false, error: 'Attendance not found' });
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(attendance.section._id.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized to view this attendance record' });
+    }
+  }
+
   res.status(200).json({ success: true, data: attendance });
 };
 
@@ -130,6 +196,29 @@ exports.updateStudentStatus = async (req, res) => {
 
   const attendance = await Attendance.findById(req.params.id);
   if (!attendance) return res.status(404).json({ success: false, error: 'Attendance not found' });
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    // 1. Verify section assignment
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(attendance.section.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+    }
+
+    // 2. Verify date is today
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const attendanceDate = new Date(attendance.date);
+    attendanceDate.setUTCHours(0, 0, 0, 0);
+    if (attendanceDate.getTime() !== today.getTime()) {
+      return res.status(403).json({ success: false, error: 'Not authorized: Teachers can only edit today\'s attendance' });
+    }
+  }
 
   const record = attendance.records.find(r => r.student.toString() === req.params.studentId);
   if (!record) return res.status(404).json({ success: false, error: 'Student record not found' });
@@ -148,6 +237,19 @@ exports.updateStudentStatus = async (req, res) => {
 // @desc    Get today's attendance for a section
 // @route   GET /api/attendance/today/:sectionId
 exports.getTodayAttendance = async (req, res) => {
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(req.params.sectionId.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+    }
+  }
+
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
 
@@ -185,6 +287,19 @@ exports.getTodayAttendance = async (req, res) => {
 exports.getSectionAttendanceSummary = async (req, res) => {
   const { from, to, subjectId } = req.query;
   const sectionId = new mongoose.Types.ObjectId(req.params.sectionId);
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(req.params.sectionId.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+    }
+  }
 
   const matchStage = { section: sectionId };
   if (subjectId) matchStage.subject = new mongoose.Types.ObjectId(subjectId);
@@ -240,9 +355,10 @@ exports.getSectionAttendanceSummary = async (req, res) => {
 // @desc    Delete attendance
 // @route   DELETE /api/attendance/:id
 exports.deleteAttendance = async (req, res) => {
-  const attendance = await Attendance.findByIdAndDelete(req.params.id);
+  const attendance = await Attendance.findById(req.params.id);
   if (!attendance) return res.status(404).json({ success: false, error: 'Attendance not found' });
-  res.status(200).json({ success: true, data: {} });
+  await attendance.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, message: 'Attendance record moved to trash' });
 };
 
 // @desc    Bulk mark holiday
@@ -291,4 +407,89 @@ exports.bulkMarkHoliday = async (req, res) => {
   }
 
   res.status(200).json({ success: true, message: `Holiday marked for ${created} section-days` });
+};
+
+// @desc    Get dashboard summary for teacher's assigned classes
+// @route   GET /api/attendance/teacher-dashboard
+exports.getTeacherDashboard = async (req, res) => {
+  const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+  const dateStr = req.query.date;
+  const targetDate = dateStr ? new Date(dateStr) : new Date();
+  targetDate.setUTCHours(0, 0, 0, 0);
+  
+  // 1. Get all assigned section/subject combos
+  const assignments = await SectionSubjectTeacher.find({ teacher: req.user.id })
+    .populate({ path: 'section', select: 'name class batch', populate: [{ path: 'class', select: 'name' }, { path: 'batch', select: 'name' }] })
+    .populate('subject', 'name');
+
+  const classes = [];
+  
+  // Create first/last day of month to calculate average attendance
+  const startOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
+  const endOfMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+
+  for (const assignment of assignments) {
+    if (!assignment.section) continue;
+
+    // 2. Count total students in this section
+    const totalStudents = await Student.countDocuments({ 
+      section: assignment.section._id, 
+      status: 'active' 
+    });
+
+    // 3. Check if marked today
+    const filter = { 
+      date: targetDate, 
+      section: assignment.section._id,
+      subject: assignment.subject?._id
+    };
+    
+    // If no subject is assigned (unlikely but possible), remove it from filter
+    if (!assignment.subject) delete filter.subject;
+
+    const todayAttendance = await Attendance.findOne(filter);
+
+    let status = 'pending'; // 'pending' | 'draft' | 'marked'
+    let todaySummary = null;
+
+    if (todayAttendance) {
+      status = todayAttendance.isDraft ? 'draft' : 'marked';
+      const presentCount = todayAttendance.records.filter(r => r.status === 'present').length;
+      const absentCount = todayAttendance.records.filter(r => r.status === 'absent').length;
+      const lateCount = todayAttendance.records.filter(r => r.status === 'late').length;
+      const leaveCount = todayAttendance.records.filter(r => r.status === 'leave').length;
+      todaySummary = { present: presentCount, absent: absentCount, late: lateCount, leave: leaveCount };
+    }
+
+    // 4. Calculate average attendance for the month
+    const monthAttendances = await Attendance.find({
+      section: assignment.section._id,
+      subject: assignment.subject?._id,
+      date: { $gte: startOfMonth, $lte: endOfMonth },
+      isHoliday: false
+    });
+
+    let avgAttendance = 0;
+    if (monthAttendances.length > 0) {
+      let totalPresents = 0;
+      let totalRecords = 0;
+      for (const att of monthAttendances) {
+        totalPresents += att.records.filter(r => r.status === 'present' || r.status === 'late').length;
+        totalRecords += att.records.length;
+      }
+      avgAttendance = totalRecords > 0 ? Math.round((totalPresents / totalRecords) * 100) : 0;
+    }
+
+    classes.push({
+      _id: assignment._id,
+      section: assignment.section,
+      subject: assignment.subject,
+      totalStudents,
+      status,
+      todaySummary,
+      avgAttendance
+    });
+  }
+
+  res.status(200).json({ success: true, data: classes });
 };

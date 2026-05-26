@@ -3,8 +3,34 @@ const Attendance = require('../models/Attendance');
 const Fine = require('../models/Fine');
 const Student = require('../models/Student');
 const Result = require('../models/Result');
+const Section = require('../models/Section');
 const { createPDF, addHeader, addTable, addFooter, addWatermark, addSignatureBlock } = require('../utils/pdfBuilder');
 const { createWorkbook, addStyledHeader, colorCodeCell, autoFitColumns, addTitleRow, addDataRows } = require('../utils/excelBuilder');
+
+// Teacher report validation helper
+const validateTeacherReportAccess = async (req, res) => {
+  if (req.user.role !== 'teacher') return true;
+
+  const sectionId = req.params.sectionId || req.query.sectionId || req.query.section || req.body.sectionId || req.body.section || req.query.section_id || req.body.section_id;
+
+  if (!sectionId) {
+    res.status(403).json({ success: false, error: 'Please specify a section ID to view reports' });
+    return false;
+  }
+
+  const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+  const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+  const assignedIds = [
+    ...(req.user.assignedSections || []).map(id => id.toString()),
+    ...teacherAssignments.map(ta => ta.section.toString())
+  ];
+
+  if (!assignedIds.includes(sectionId.toString())) {
+    res.status(403).json({ success: false, error: 'Not authorized: You do not have access to this section\'s reports' });
+    return false;
+  }
+  return true;
+};
 
 // Helper to get basic attendance aggregate
 const getAttendanceAggregate = (matchStage) => [
@@ -33,6 +59,9 @@ const getAttendanceAggregate = (matchStage) => [
 
 // @desc    Class-wise attendance report
 exports.classWiseAttendanceReport = async (req, res) => {
+  if (req.user.role === 'teacher') {
+    return res.status(403).json({ success: false, error: 'Not authorized: Teachers cannot view class-wise reports' });
+  }
   const classId = new mongoose.Types.ObjectId(req.params.classId);
   const matchStage = { class: classId };
   if (req.query.from && req.query.to) {
@@ -83,6 +112,9 @@ exports.classWiseAttendanceReport = async (req, res) => {
 
 // @desc    Batch-wise attendance report
 exports.batchWiseAttendanceReport = async (req, res) => {
+  if (req.user.role === 'teacher') {
+    return res.status(403).json({ success: false, error: 'Not authorized: Teachers cannot view batch-wise reports' });
+  }
   const batchId = new mongoose.Types.ObjectId(req.params.batchId);
   const matchStage = { batch: batchId };
   
@@ -92,6 +124,7 @@ exports.batchWiseAttendanceReport = async (req, res) => {
 
 // @desc    Section-wise attendance report
 exports.sectionWiseAttendanceReport = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const sectionId = new mongoose.Types.ObjectId(req.params.sectionId);
   const matchStage = { section: sectionId };
   if (req.query.from && req.query.to) {
@@ -141,6 +174,20 @@ exports.sectionWiseAttendanceReport = async (req, res) => {
 // @desc    Student-wise report
 exports.studentWiseReport = async (req, res) => {
   const studentId = new mongoose.Types.ObjectId(req.params.studentId);
+  const student = await Student.findById(studentId);
+  if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(student.section.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized: Student is not in your assigned sections' });
+    }
+  }
 
   const attendance = await Attendance.aggregate(getAttendanceAggregate({ 'records.student': studentId }));
   
@@ -188,11 +235,24 @@ exports.dateWiseReport = async (req, res) => {
     }
   ]);
 
-  res.status(200).json({ success: true, date, data: report });
+  // Teacher check: filter results
+  let filteredReport = report;
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    filteredReport = report.filter(r => assignedIds.includes(r._id.toString()));
+  }
+
+  res.status(200).json({ success: true, date, data: filteredReport });
 };
 
 // @desc    Monthly attendance report
 exports.monthlyAttendanceReport = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const year = parseInt(req.query.year || new Date().getFullYear());
   const month = parseInt(req.query.month || new Date().getMonth() + 1);
   const sectionId = new mongoose.Types.ObjectId(req.query.sectionId);
@@ -210,6 +270,7 @@ exports.monthlyAttendanceReport = async (req, res) => {
 
 // @desc    Low attendance report
 exports.lowAttendanceReport = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const threshold = parseFloat(req.query.threshold || 75);
   const sectionId = new mongoose.Types.ObjectId(req.query.sectionId);
 
@@ -230,6 +291,7 @@ exports.lowAttendanceReport = async (req, res) => {
 
 // @desc    Section Record Report (FULL COMPREHENSIVE AGGREGATION)
 exports.sectionRecordReport = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const sectionId = new mongoose.Types.ObjectId(req.params.sectionId);
   const { semester } = req.query;
 
@@ -312,6 +374,20 @@ exports.sectionRecordReport = async (req, res) => {
 // PDF: Student Fine
 exports.exportStudentFinePDF = async (req, res) => {
   const student = await Student.findById(req.params.studentId);
+  if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id }).select('section');
+    const assignedIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    if (!assignedIds.includes(student.section.toString())) {
+      return res.status(403).json({ success: false, error: 'Not authorized to view student fines' });
+    }
+  }
+
   const fines = await Fine.find({ student: req.params.studentId }).populate('fineType', 'name');
 
   const doc = createPDF();
@@ -342,6 +418,7 @@ exports.exportStudentFinePDF = async (req, res) => {
 
 // PDF: Section Fine List
 exports.exportSectionFinePDF = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const sectionId = new mongoose.Types.ObjectId(req.params.sectionId);
   const section = await Section.findById(sectionId).populate('class');
   
@@ -378,7 +455,7 @@ exports.exportSectionFinePDF = async (req, res) => {
 
 // PDF: Full Section Academic Record
 exports.exportSectionRecordPDF = async (req, res) => {
-  // Requires calling sectionRecordReport logic internally, keeping it simple for PDF
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const section = await Section.findById(req.params.sectionId).populate('class');
   const doc = createPDF({ layout: 'landscape' });
   
@@ -409,6 +486,7 @@ exports.exportSectionRecordPDF = async (req, res) => {
 
 // Excel: General Attendance
 exports.exportExcel = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const sectionId = new mongoose.Types.ObjectId(req.params.sectionId);
   const section = await Section.findById(sectionId).populate('class');
 
@@ -450,6 +528,7 @@ exports.exportExcel = async (req, res) => {
 
 // Excel: Marks
 exports.exportMarksExcel = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const { sectionId, subjectId } = req.params;
   const marks = await ExamMark.find({ section: sectionId, subject: subjectId })
     .populate('student', 'name rollNumber')
@@ -480,6 +559,7 @@ exports.exportMarksExcel = async (req, res) => {
 
 // Excel: Results
 exports.exportResultExcel = async (req, res) => {
+  if (!(await validateTeacherReportAccess(req, res))) return;
   const results = await Result.find({ section: req.params.sectionId })
     .populate('student', 'name rollNumber cgpa')
     .sort('rank');

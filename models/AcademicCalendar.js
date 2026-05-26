@@ -26,7 +26,7 @@ const AcademicCalendarSchema = new mongoose.Schema({
   },
   affectedClasses: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class'
+    ref: 'Department'
   }],
   affectedSections: [{
     type: mongoose.Schema.Types.ObjectId,

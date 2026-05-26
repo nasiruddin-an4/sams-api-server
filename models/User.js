@@ -63,9 +63,14 @@ const UserSchema = new mongoose.Schema({
     type: String,
     maxlength: [20, 'Phone number cannot exceed 20 characters']
   },
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'other'],
+    default: 'male'
+  },
   assignedClasses: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class'
+    ref: 'Department'
   }],
   assignedSections: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -93,6 +98,16 @@ const UserSchema = new mongoose.Schema({
   }],
   isFirstLogin: { type: Boolean, default: true },
   emailSent: { type: Boolean, default: false },
+  passwordChangedAt: {
+    type: Date
+  },
+  welcomeEmailSentAt: {
+    type: Date
+  },
+  linkedStudentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student'
+  },
   lastLogin: {
     type: Date
   }
@@ -103,7 +118,7 @@ const UserSchema = new mongoose.Schema({
 // Encrypt password using bcrypt
 UserSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {
-    next();
+    return next();
   }
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
@@ -127,5 +142,8 @@ UserSchema.methods.getSignedRefreshToken = function () {
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
+
+const softDelete = require('../utils/softDelete');
+UserSchema.plugin(softDelete);
 
 module.exports = mongoose.model('User', UserSchema);

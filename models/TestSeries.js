@@ -61,4 +61,7 @@ const TestSeriesSchema = new mongoose.Schema({
 
 TestSeriesSchema.index({ subject: 1, section: 1, testNumber: 1 }, { unique: true });
 
+const softDelete = require('../utils/softDelete');
+TestSeriesSchema.plugin(softDelete);
+
 module.exports = mongoose.model('TestSeries', TestSeriesSchema);

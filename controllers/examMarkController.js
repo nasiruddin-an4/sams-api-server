@@ -10,12 +10,51 @@ exports.getExamMarks = async (req, res) => {
   const query = {};
 
   if (classId) query.class = classId;
-  if (sectionId) query.section = sectionId;
-  if (subjectId) query.subject = subjectId;
   if (examType) query.examType = examType;
   if (academicYear) query.academicYear = academicYear;
   if (semester) query.semester = parseInt(semester);
   if (studentId) query.student = studentId;
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const teacherAssignments = await SectionSubjectTeacher.find({ teacher: req.user.id });
+    const assignedSectionIds = [
+      ...(req.user.assignedSections || []).map(id => id.toString()),
+      ...teacherAssignments.map(ta => ta.section.toString())
+    ];
+    const uniqueSectionIds = [...new Set(assignedSectionIds)];
+    const assignedSubjectIds = teacherAssignments.map(ta => ta.subject.toString());
+
+    if (sectionId) {
+      if (!uniqueSectionIds.includes(sectionId.toString())) {
+        return res.status(403).json({ success: false, error: 'Not authorized for this section' });
+      }
+      query.section = sectionId;
+    } else {
+      query.section = { $in: uniqueSectionIds };
+    }
+
+    if (subjectId) {
+      const Subject = require('../models/Subject');
+      const subject = await Subject.findById(subjectId);
+      const isAssignedSubject = assignedSubjectIds.includes(subjectId.toString()) || 
+        (subject && subject.teacher && subject.teacher.toString() === req.user.id);
+      
+      if (!isAssignedSubject) {
+        return res.status(403).json({ success: false, error: 'Not authorized for this subject' });
+      }
+      query.subject = subjectId;
+    } else {
+      const Subject = require('../models/Subject');
+      const teacherSubjects = await Subject.find({ teacher: req.user.id }).select('_id');
+      const allSubjectIds = [...new Set([...assignedSubjectIds, ...teacherSubjects.map(s => s._id.toString())])];
+      query.subject = { $in: allSubjectIds };
+    }
+  } else {
+    if (sectionId) query.section = sectionId;
+    if (subjectId) query.subject = subjectId;
+  }
 
   const total = await ExamMark.countDocuments(query);
   const marks = await ExamMark.find(query)
@@ -52,6 +91,26 @@ exports.getExamMarkById = async (req, res) => {
 // @desc    Create exam mark (single)
 // @route   POST /api/exam-marks
 exports.createExamMark = async (req, res) => {
+  const { section, subject } = req.body;
+
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const hasAssignment = await SectionSubjectTeacher.findOne({
+      section,
+      subject,
+      teacher: req.user.id
+    });
+    const Subject = require('../models/Subject');
+    const subj = await Subject.findById(subject);
+    const hasDirectSubject = subj && subj.teacher && subj.teacher.toString() === req.user.id;
+    const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(section.toString());
+
+    if (!hasAssignment && !(hasDirectSubject && isDirectSection)) {
+      return res.status(403).json({ success: false, error: 'Not authorized to enter marks for this section and subject' });
+    }
+  }
+
   req.body.enteredBy = req.user.id;
   const mark = await ExamMark.create(req.body);
   await mark.populate([
@@ -69,6 +128,27 @@ exports.bulkCreateExamMarks = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Please provide an array of marks' });
   }
 
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    const firstMark = marks[0];
+    if (firstMark) {
+      const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+      const hasAssignment = await SectionSubjectTeacher.findOne({
+        section: firstMark.section,
+        subject: firstMark.subject,
+        teacher: req.user.id
+      });
+      const Subject = require('../models/Subject');
+      const subj = await Subject.findById(firstMark.subject);
+      const hasDirectSubject = subj && subj.teacher && subj.teacher.toString() === req.user.id;
+      const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(firstMark.section.toString());
+
+      if (!hasAssignment && !(hasDirectSubject && isDirectSection)) {
+        return res.status(403).json({ success: false, error: 'Not authorized to enter marks for this section and subject' });
+      }
+    }
+  }
+
   const marksWithUser = marks.map(m => ({ ...m, enteredBy: req.user.id }));
   const results = [];
   const errors = [];
@@ -76,7 +156,6 @@ exports.bulkCreateExamMarks = async (req, res) => {
   for (let i = 0; i < marksWithUser.length; i += 100) {
     const batch = marksWithUser.slice(i, i + 100);
     try {
-      // Use create to trigger pre-save hooks for grade calculation
       const created = await ExamMark.create(batch);
       results.push(...created);
     } catch (err) {
@@ -97,8 +176,29 @@ exports.updateExamMark = async (req, res) => {
   let mark = await ExamMark.findById(req.params.id);
   if (!mark) return res.status(404).json({ success: false, error: 'Exam mark not found' });
 
+  // Teacher check
+  if (req.user.role === 'teacher') {
+    if (mark.enteredBy && mark.enteredBy.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Not authorized to edit marks entered by another teacher' });
+    }
+    const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+    const hasAssignment = await SectionSubjectTeacher.findOne({
+      section: mark.section,
+      subject: mark.subject,
+      teacher: req.user.id
+    });
+    const Subject = require('../models/Subject');
+    const subj = await Subject.findById(mark.subject);
+    const hasDirectSubject = subj && subj.teacher && subj.teacher.toString() === req.user.id;
+    const isDirectSection = req.user.assignedSections && req.user.assignedSections.map(id => id.toString()).includes(mark.section.toString());
+
+    if (!hasAssignment && !(hasDirectSubject && isDirectSection)) {
+      return res.status(403).json({ success: false, error: 'Not authorized for this section and subject' });
+    }
+  }
+
   Object.assign(mark, req.body);
-  await mark.save(); // triggers pre-save grade calculation
+  await mark.save();
 
   await mark.populate([
     { path: 'student', select: 'name rollNumber' },
@@ -111,22 +211,31 @@ exports.updateExamMark = async (req, res) => {
 // @desc    Delete exam mark
 // @route   DELETE /api/exam-marks/:id
 exports.deleteExamMark = async (req, res) => {
-  const mark = await ExamMark.findByIdAndDelete(req.params.id);
+  const mark = await ExamMark.findById(req.params.id);
   if (!mark) return res.status(404).json({ success: false, error: 'Exam mark not found' });
-  res.status(200).json({ success: true, data: {} });
+  await mark.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+  res.status(200).json({ success: true, message: 'Exam mark moved to trash' });
 };
 
 // @desc    Verify exam mark
 // @route   PATCH /api/exam-marks/:id/verify
 exports.verifyExamMark = async (req, res) => {
-  const mark = await ExamMark.findByIdAndUpdate(
-    req.params.id,
-    { isVerified: true, verifiedBy: req.user.id },
-    { new: true }
-  ).populate('student', 'name rollNumber')
-   .populate('verifiedBy', 'name');
-
+  const mark = await ExamMark.findById(req.params.id);
   if (!mark) return res.status(404).json({ success: false, error: 'Exam mark not found' });
+
+  // Cannot verify own marks
+  if (mark.enteredBy && mark.enteredBy.toString() === req.user.id) {
+    return res.status(403).json({ success: false, error: 'Not authorized: You cannot verify marks entered by yourself' });
+  }
+
+  mark.isVerified = true;
+  mark.verifiedBy = req.user.id;
+  await mark.save();
+
+  await mark.populate([
+    { path: 'student', select: 'name rollNumber' },
+    { path: 'verifiedBy', select: 'name' }
+  ]);
 
   // Send notification to parent/student that marks are verified
   if (mark.student) {

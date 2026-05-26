@@ -7,20 +7,30 @@ const BatchSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Batch name cannot exceed 100 characters']
   },
-  class: {
+  department: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class',
-    required: [true, 'Please add a class']
+    ref: 'Department',
+    required: [true, 'Please add a department']
+  },
+  currentSemester: {
+    type: String,
+    required: [true, 'Please add a current semester']
   },
   year: {
     type: Number,
     required: [true, 'Please add a year']
   },
   startDate: {
-    type: Date
+    type: Date,
+    required: [true, 'Please add a start date']
   },
   endDate: {
-    type: Date
+    type: Date,
+    required: [true, 'Please add an end date']
+  },
+  description: {
+    type: String,
+    maxlength: [500, 'Description cannot exceed 500 characters']
   },
   isActive: {
     type: Boolean,
@@ -43,6 +53,9 @@ BatchSchema.virtual('sections', {
   justOne: false
 });
 
-BatchSchema.index({ name: 1, class: 1 }, { unique: true });
+BatchSchema.index({ name: 1, department: 1 }, { unique: true });
+
+const softDelete = require('../utils/softDelete');
+BatchSchema.plugin(softDelete);
 
 module.exports = mongoose.model('Batch', BatchSchema);

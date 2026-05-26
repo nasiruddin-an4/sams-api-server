@@ -16,12 +16,16 @@ const SubjectSchema = new mongoose.Schema({
   },
   class: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class',
-    required: [true, 'Please add a class']
+    ref: 'Department'
   },
-  teacher: {
+  department: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'Department',
+    required: [true, 'Please add a department']
+  },
+  semester: {
+    type: String,
+    required: [true, 'Please add a semester']
   },
   type: {
     type: String,
@@ -41,9 +45,16 @@ const SubjectSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  teacher: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true
 });
+
+const softDelete = require('../utils/softDelete');
+SubjectSchema.plugin(softDelete);
 
 module.exports = mongoose.model('Subject', SubjectSchema);

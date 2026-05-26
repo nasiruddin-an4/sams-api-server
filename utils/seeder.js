@@ -9,7 +9,7 @@ const dotenv = require('dotenv');
 dotenv.config({ path: __dirname + '/../.env' });
 
 const User = require('../models/User');
-const Class = require('../models/Class');
+const Class = require('../models/Department');
 const Batch = require('../models/Batch');
 const Section = require('../models/Section');
 const Subject = require('../models/Subject');
@@ -24,6 +24,7 @@ const TestSeries = require('../models/TestSeries');
 const ClassTest = require('../models/ClassTest');
 const Result = require('../models/Result');
 const AcademicCalendar = require('../models/AcademicCalendar');
+const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
 
 const connectDB = require('../config/db');
 
@@ -49,7 +50,8 @@ const seedData = async () => {
       TestSeries.deleteMany(),
       ClassTest.deleteMany(),
       Result.deleteMany(),
-      AcademicCalendar.deleteMany()
+      AcademicCalendar.deleteMany(),
+      SectionSubjectTeacher.deleteMany()
     ]);
     console.log('✅ Cleared all existing data');
 
@@ -150,6 +152,59 @@ const seedData = async () => {
     const sub4 = await Subject.create({ name: 'Digital Electronics Lab', code: 'EEE201L', class: class2._id, teacher: teacher4._id, type: 'lab', creditHours: 2, description: 'Digital logic circuits laboratory', isActive: true });
     const sub5 = await Subject.create({ name: 'Computer Networks', code: 'CSE401', class: class1._id, teacher: teacher3._id, type: 'theory', creditHours: 3, description: 'Network protocols, TCP/IP, routing', isActive: true });
     console.log('✅ Created 5 subjects');
+
+    // ===== 5.5 TEACHER ASSIGNMENTS (SectionSubjectTeacher) =====
+    await SectionSubjectTeacher.create({
+      section: secA._id,
+      subject: sub1._id,
+      teacher: teacher1._id,
+      batch: batch1._id,
+      semester: '3',
+      academicYear: '2025-2026',
+      isActive: true,
+      createdBy: admin._id
+    });
+    await SectionSubjectTeacher.create({
+      section: secA._id,
+      subject: sub3._id,
+      teacher: teacher1._id,
+      batch: batch1._id,
+      semester: '3',
+      academicYear: '2025-2026',
+      isActive: true,
+      createdBy: admin._id
+    });
+    await SectionSubjectTeacher.create({
+      section: secB._id,
+      subject: sub2._id,
+      teacher: teacher2._id,
+      batch: batch1._id,
+      semester: '3',
+      academicYear: '2025-2026',
+      isActive: true,
+      createdBy: admin._id
+    });
+    await SectionSubjectTeacher.create({
+      section: secC._id,
+      subject: sub5._id,
+      teacher: teacher3._id,
+      batch: batch2._id,
+      semester: '3',
+      academicYear: '2025-2026',
+      isActive: true,
+      createdBy: admin._id
+    });
+    await SectionSubjectTeacher.create({
+      section: secD._id,
+      subject: sub4._id,
+      teacher: teacher4._id,
+      batch: batch1._id,
+      semester: '1',
+      academicYear: '2025-2026',
+      isActive: true,
+      createdBy: admin._id
+    });
+    console.log('✅ Created 5 SectionSubjectTeacher assignments');
 
     // ===== 6. STUDENTS (30) =====
     const studentNames = [

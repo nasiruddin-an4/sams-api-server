@@ -1,14 +1,27 @@
 const User = require('../models/User');
+const { sendTeacherWelcomeEmail } = require('../config/email');
 
 // @desc    Get all users
 // @route   GET /api/users
 // @access  Private/Admin
 exports.getUsers = async (req, res) => {
-  const { role, isActive, search, page = 1, limit = 20 } = req.query;
+  const { role, isActive, search, department, employmentType, employmentStatus, page = 1, limit = 20 } = req.query;
   const query = {};
 
-  if (role) query.role = role;
-  if (isActive !== undefined) query.isActive = isActive === 'true';
+  if (role) {
+    if (role === 'super_admin') {
+      return res.status(403).json({ success: false, error: 'Access denied' });
+    }
+    query.role = role;
+  } else {
+    query.role = { $ne: 'super_admin' };
+  }
+
+  if (isActive !== undefined && isActive !== '') query.isActive = isActive === 'true';
+  if (department) query.department = department;
+  if (employmentType) query.employmentType = employmentType;
+  if (employmentStatus) query.employmentStatus = employmentStatus;
+
   if (search) {
     query.$or = [
       { name: { $regex: search, $options: 'i' } },
@@ -62,6 +75,24 @@ exports.createUser = async (req, res) => {
 
   const user = await User.create(req.body);
 
+  if (user.role === 'teacher' && user.email) {
+    // Send welcome email in background with plain text password from req.body
+    sendTeacherWelcomeEmail({
+      name: user.name,
+      email: user.email,
+      password: req.body.password
+    }).then(async (result) => {
+      if (result && result.sent) {
+        await User.findByIdAndUpdate(user._id, { 
+          emailSent: true,
+          welcomeEmailSentAt: new Date()
+        });
+      }
+    }).catch((err) => {
+      console.error('Welcome email error:', err);
+    });
+  }
+
   res.status(201).json({ success: true, data: user });
 };
 
@@ -108,17 +139,15 @@ exports.deleteUser = async (req, res) => {
     }
   }
 
-  const user = await User.findByIdAndUpdate(
-    req.params.id,
-    { isActive: false },
-    { new: true }
-  );
-
+  const user = await User.findById(req.params.id);
   if (!user) {
     return res.status(404).json({ success: false, error: 'User not found' });
   }
 
-  res.status(200).json({ success: true, data: user, message: 'User deactivated' });
+  user.isActive = false;
+  await user.softDelete(req.user.id, req.body.reason || 'Admin requested deletion');
+
+  res.status(200).json({ success: true, data: user, message: 'User deactivated and moved to trash' });
 };
 
 // @desc    Get teachers list

@@ -55,7 +55,7 @@ const FineSchema = new mongoose.Schema({
   },
   class: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class'
+    ref: 'Department'
   },
   batch: {
     type: mongoose.Schema.Types.ObjectId,
@@ -78,5 +78,8 @@ const FineSchema = new mongoose.Schema({
 FineSchema.index({ student: 1, fineType: 1, issuedDate: 1 });
 FineSchema.index({ status: 1 });
 FineSchema.index({ section: 1 });
+
+const softDelete = require('../utils/softDelete');
+FineSchema.plugin(softDelete);
 
 module.exports = mongoose.model('Fine', FineSchema);
