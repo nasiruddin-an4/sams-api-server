@@ -413,6 +413,7 @@ exports.bulkMarkHoliday = async (req, res) => {
 // @route   GET /api/attendance/teacher-dashboard
 exports.getTeacherDashboard = async (req, res) => {
   const SectionSubjectTeacher = require('../models/SectionSubjectTeacher');
+  const Section = require('../models/Section');
   const dateStr = req.query.date;
   const targetDate = dateStr ? new Date(dateStr) : new Date();
   targetDate.setUTCHours(0, 0, 0, 0);
@@ -421,6 +422,25 @@ exports.getTeacherDashboard = async (req, res) => {
   const assignments = await SectionSubjectTeacher.find({ teacher: req.user.id })
     .populate({ path: 'section', select: 'name class batch', populate: [{ path: 'class', select: 'name' }, { path: 'batch', select: 'name' }] })
     .populate('subject', 'name');
+
+  // Also include sections assigned directly to the user (Class Teacher role)
+  if (req.user.assignedSections && req.user.assignedSections.length > 0) {
+    const assignedSections = await Section.find({ _id: { $in: req.user.assignedSections } })
+      .populate('class', 'name')
+      .populate('batch', 'name');
+
+    assignedSections.forEach(section => {
+      // Avoid duplicate if already exists as a general assignment without a subject
+      const alreadyExists = assignments.some(a => a.section && a.section._id.toString() === section._id.toString() && !a.subject);
+      if (!alreadyExists) {
+        assignments.push({
+          _id: section._id,
+          section: section,
+          subject: null
+        });
+      }
+    });
+  }
 
   const classes = [];
   
