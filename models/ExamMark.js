@@ -7,6 +7,10 @@ const ExamMarkSchema = new mongoose.Schema({
     ref: 'Student',
     required: [true, 'Please add a student']
   },
+  enrollment: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Enrollment'
+  },
   subject: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Subject',

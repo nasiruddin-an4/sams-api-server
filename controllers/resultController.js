@@ -173,10 +173,19 @@ exports.generateResult = async (req, res) => {
 // @desc    Get results
 // @route   GET /api/results
 exports.getResults = async (req, res) => {
-  const { sectionId, academicYear, semester, studentId, page = 1, limit = 50 } = req.query;
+  const { sectionId, academicYear, semester, studentId, batchId, classId, page = 1, limit = 50 } = req.query;
   const query = {};
 
-  if (sectionId) query.section = sectionId;
+  if (sectionId) {
+    query.section = sectionId;
+  } else if (batchId) {
+    const sections = await Section.find({ batch: batchId }).select('_id');
+    query.section = { $in: sections.map(s => s._id) };
+  } else if (classId) {
+    const sections = await Section.find({ department: classId }).select('_id');
+    query.section = { $in: sections.map(s => s._id) };
+  }
+
   if (academicYear) query.academicYear = academicYear;
   if (semester) query.semester = parseInt(semester);
   if (studentId) query.student = studentId;

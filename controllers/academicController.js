@@ -17,12 +17,12 @@ exports.getBatches = async (req, res) => {
     filter._id = { $in: batchIds };
   }
 
-  const batches = await Batch.find(filter).populate('department', 'name').populate('sections').sort('-year');
+  const batches = await Batch.find(filter).populate('department', 'name code').populate('sections').sort('-year');
   res.status(200).json({ success: true, count: batches.length, data: batches });
 };
 
 exports.getBatch = async (req, res) => {
-  const batch = await Batch.findById(req.params.id).populate('department', 'name').populate('sections');
+  const batch = await Batch.findById(req.params.id).populate('department', 'name code').populate('sections');
   if (!batch) return res.status(404).json({ success: false, error: 'Batch not found' });
   res.status(200).json({ success: true, data: batch });
 };

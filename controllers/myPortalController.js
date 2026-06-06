@@ -197,6 +197,60 @@ exports.getMyFines = async (req, res) => {
   res.status(200).json({ success: true, data: fines });
 };
 
+const fetchRichEnrollments = async (studentId) => {
+  const Enrollment = require('../models/Enrollment');
+  const Attendance = require('../models/Attendance');
+  const ExamMark = require('../models/ExamMark');
+  const Result = require('../models/Result');
+
+  const enrollments = await Enrollment.find({ student: studentId })
+    .populate('department', 'name')
+    .populate('batch', 'name')
+    .populate('section', 'name')
+    .populate('classTeacher', 'name')
+    .populate('subjects.subject', 'name code')
+    .populate('subjects.teacher', 'name')
+    .sort('semester');
+
+  const history = [];
+
+  for (const enrollment of enrollments) {
+    const attendances = await Attendance.find({ 'records.enrollment': enrollment._id });
+    let present = 0, absent = 0, late = 0, total = 0;
+    attendances.forEach(att => {
+      const record = att.records.find(r => r.enrollment && r.enrollment.toString() === enrollment._id.toString());
+      if (record) {
+        total++;
+        if (record.status === 'present') present++;
+        if (record.status === 'absent') absent++;
+        if (record.status === 'late') late++;
+      }
+    });
+    const attendancePct = total > 0 ? Math.round(((present + late) / total) * 100) : 0;
+
+    const marks = await ExamMark.find({ enrollment: enrollment._id }).populate('subject', 'name');
+    const result = await Result.findOne({ enrollment: enrollment._id });
+
+    history.push({
+      _id: enrollment._id,
+      semester: enrollment.semester,
+      academicYear: enrollment.academicYear,
+      section: enrollment.section,
+      department: enrollment.department,
+      classTeacher: enrollment.classTeacher,
+      subjects: enrollment.subjects,
+      status: enrollment.status,
+      enrolledAt: enrollment.enrolledAt,
+      transferredTo: enrollment.transferredTo,
+      transferredAt: enrollment.transferredAt,
+      attendance: { percentage: attendancePct, present, absent, late, total },
+      marks,
+      result: result ? { sgpa: result.sgpa, isPassed: result.isPassed } : null
+    });
+  }
+  return history;
+};
+
 // @desc    Get My Profile
 // @route   GET /api/my/profile
 exports.getMyProfile = async (req, res) => {
@@ -205,7 +259,11 @@ exports.getMyProfile = async (req, res) => {
     .populate('batch', 'name year')
     .populate('section', 'name');
 
-  res.status(200).json({ success: true, data: student });
+  const enrollments = await fetchRichEnrollments(req.studentId);
+  const profileData = student ? student.toObject() : {};
+  profileData.enrollments = enrollments;
+
+  res.status(200).json({ success: true, data: profileData });
 };
 
 // @desc    Update My Profile (Limited fields)
@@ -224,5 +282,10 @@ exports.updateMyProfile = async (req, res) => {
     .populate('batch', 'name year')
     .populate('section', 'name');
 
-  res.status(200).json({ success: true, data: student });
+  const enrollments = await fetchRichEnrollments(req.studentId);
+
+  const profileData = student ? student.toObject() : {};
+  profileData.enrollments = enrollments;
+
+  res.status(200).json({ success: true, data: profileData });
 };

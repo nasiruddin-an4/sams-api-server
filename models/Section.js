@@ -51,6 +51,13 @@ SectionSchema.virtual('students', {
   justOne: false
 });
 
+SectionSchema.virtual('class', {
+  ref: 'Department',
+  localField: 'department',
+  foreignField: '_id',
+  justOne: true
+});
+
 SectionSchema.index({ name: 1, batch: 1, department: 1 }, { unique: true });
 
 const softDelete = require('../utils/softDelete');

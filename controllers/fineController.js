@@ -39,12 +39,13 @@ exports.deleteFineType = async (req, res) => {
 // ==================== FINES ====================
 
 exports.getFines = async (req, res) => {
-  const { studentId, sectionId, classId, status, fineType, from, to, page = 1, limit = 20 } = req.query;
+  const { studentId, sectionId, classId, batchId, status, fineType, from, to, page = 1, limit = 20 } = req.query;
   const query = {};
 
   if (studentId) query.student = studentId;
   if (sectionId) query.section = sectionId;
   if (classId) query.class = classId;
+  if (batchId) query.batch = batchId;
   if (status) query.status = status;
   if (fineType) query.fineType = fineType;
   if (from || to) {

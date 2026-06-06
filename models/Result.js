@@ -48,6 +48,10 @@ const ResultSchema = new mongoose.Schema({
     ref: 'Student',
     required: [true, 'Please add a student']
   },
+  enrollment: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Enrollment'
+  },
   academicYear: {
     type: String,
     required: [true, 'Please add academic year']

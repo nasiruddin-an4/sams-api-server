@@ -6,6 +6,10 @@ const AttendanceRecordSchema = new mongoose.Schema({
     ref: 'Student',
     required: true
   },
+  enrollment: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Enrollment'
+  },
   status: {
     type: String,
     enum: ['present', 'absent', 'late', 'leave', 'holiday'],

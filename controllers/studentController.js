@@ -11,12 +11,13 @@ const { sendWelcomeEmail } = require('../config/email');
 // @desc    Get all students
 // @route   GET /api/students
 exports.getStudents = async (req, res) => {
-  const { classId, batchId, sectionId, gender, isActive, search, semester, program, page = 1, limit = 20 } = req.query;
+  const { classId, batchId, sectionId, gender, isActive, search, semester, program, status, page = 1, limit = 20 } = req.query;
   const query = {};
 
   if (classId) query.class = classId;
   if (batchId) query.batch = batchId;
   if (gender) query.gender = gender;
+  if (status) query.status = status;
   if (isActive !== undefined) query.isActive = isActive === 'true';
   if (semester) query.semester = parseInt(semester);
   if (program) query.program = { $regex: program, $options: 'i' };
@@ -58,7 +59,7 @@ exports.getStudents = async (req, res) => {
 
   const total = await Student.countDocuments(query);
   const students = await Student.find(query)
-    .populate('class', 'name')
+    .populate('class', 'name code')
     .populate('batch', 'name year')
     .populate('section', 'name')
     .skip((page - 1) * limit)
@@ -164,6 +165,10 @@ exports.createStudent = async (req, res) => {
 
   const student = await Student.create(studentData);
 
+  // Sync enrollment history
+  const { createEnrollmentSnapshot } = require('../services/enrollmentService');
+  await createEnrollmentSnapshot([student._id], student.section).catch(err => console.error("Enrollment sync failed on createStudent:", err));
+
   // Link user back to student and send email
   if (user && req.body.email) {
     user.linkedStudentId = student._id;
@@ -201,6 +206,10 @@ exports.updateStudent = async (req, res) => {
     runValidators: true
   });
   if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+
+  // Sync enrollment history
+  const { createEnrollmentSnapshot } = require('../services/enrollmentService');
+  await createEnrollmentSnapshot([student._id], student.section).catch(err => console.error("Enrollment sync failed on updateStudent:", err));
 
   // Sync linked User isActive state
   if (student.userId && updateData.status) {
@@ -366,6 +375,21 @@ exports.getStudentAcademicSummary = async (req, res) => {
   // Results
   const results = await Result.find({ student: studentId }).sort('-semester');
 
+  // Enrollment History
+  const Enrollment = require('../models/Enrollment');
+  const enrollments = await Enrollment.find({ student: studentId })
+    .populate('class', 'name code')
+    .populate('batch', 'name year')
+    .populate({
+      path: 'section',
+      select: 'name teacher',
+      populate: {
+        path: 'teacher',
+        select: 'name email'
+      }
+    })
+    .sort('semester');
+
   res.status(200).json({
     success: true,
     data: {
@@ -374,6 +398,82 @@ exports.getStudentAcademicSummary = async (req, res) => {
       examMarks,
       fines,
       results,
+      enrollments,
+      cgpa: student.cgpa
+    }
+  });
+};
+
+// @desc    Get complete historical enrollment academic history
+// @route   GET /api/students/:id/academic-history
+exports.getStudentAcademicHistory = async (req, res) => {
+  const studentId = req.params.id;
+  const Student = require('../models/Student');
+  const Enrollment = require('../models/Enrollment');
+  const Attendance = require('../models/Attendance');
+  const ExamMark = require('../models/ExamMark');
+  const Result = require('../models/Result');
+
+  const student = await Student.findById(studentId).select('name rollNumber department');
+  if (!student) {
+    return res.status(404).json({ success: false, error: 'Student not found' });
+  }
+
+  // Get all enrollments for this student
+  const enrollments = await Enrollment.find({ student: studentId })
+    .populate('department', 'name')
+    .populate('batch', 'name')
+    .populate('section', 'name')
+    .populate('classTeacher', 'name')
+    .populate('subjects.subject', 'name code')
+    .populate('subjects.teacher', 'name')
+    .sort('semester');
+
+  const history = [];
+
+  for (const enrollment of enrollments) {
+    // Attendance stats for this enrollment
+    const attendances = await Attendance.find({ 'records.enrollment': enrollment._id });
+    let present = 0, absent = 0, late = 0, total = 0;
+    attendances.forEach(att => {
+      const record = att.records.find(r => r.enrollment && r.enrollment.toString() === enrollment._id.toString());
+      if (record) {
+        total++;
+        if (record.status === 'present') present++;
+        if (record.status === 'absent') absent++;
+        if (record.status === 'late') late++;
+      }
+    });
+    const attendancePct = total > 0 ? Math.round(((present + late) / total) * 100) : 0;
+
+    // Exam marks for this enrollment
+    const marks = await ExamMark.find({ enrollment: enrollment._id }).populate('subject', 'name');
+
+    // Result for this enrollment
+    const result = await Result.findOne({ enrollment: enrollment._id });
+
+    history.push({
+      _id: enrollment._id,
+      semester: enrollment.semester,
+      academicYear: enrollment.academicYear,
+      section: enrollment.section,
+      classTeacher: enrollment.classTeacher,
+      subjects: enrollment.subjects,
+      status: enrollment.status,
+      enrolledAt: enrollment.enrolledAt,
+      transferredTo: enrollment.transferredTo,
+      transferredAt: enrollment.transferredAt,
+      attendance: { percentage: attendancePct, present, absent, late, total },
+      marks,
+      result: result ? { sgpa: result.sgpa, isPassed: result.isPassed } : null
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      student,
+      enrollments: history,
       cgpa: student.cgpa
     }
   });
@@ -401,4 +501,274 @@ exports.updateStudentCGPA = async (req, res) => {
   await Student.findByIdAndUpdate(req.params.id, { cgpa });
 
   res.status(200).json({ success: true, data: { cgpa, semestersCount: results.length } });
+};
+
+// @desc    Get batch overview of sections and student status distribution
+// @route   GET /api/students/batch-overview
+exports.getBatchOverview = async (req, res) => {
+  const Batch = require('../models/Batch');
+  const Section = require('../models/Section');
+
+  // Find all batches, populated with department
+  const batches = await Batch.find()
+    .populate('department', 'name')
+    .sort('-year');
+
+  const overview = [];
+
+  for (const batch of batches) {
+    // Find all sections for this batch
+    const sections = await Section.find({ batch: batch._id })
+      .populate('teacher', 'name email');
+
+    const sectionsData = [];
+    let totalBatchStudents = 0;
+
+    for (const section of sections) {
+      // Aggregate student counts by status for this section
+      const studentCounts = await Student.aggregate([
+        { $match: { section: section._id, deleted: { $ne: true } } },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]);
+
+      const counts = {
+        active: 0,
+        dropout: 0,
+        suspended: 0,
+        graduated: 0,
+        total: 0
+      };
+
+      studentCounts.forEach(group => {
+        const status = group._id || 'active';
+        if (status === 'active') counts.active = group.count;
+        else if (status === 'dropout') counts.dropout = group.count;
+        else if (status === 'suspended') counts.suspended = group.count;
+        else if (status === 'graduated') counts.graduated = group.count;
+        
+        counts.total += group.count;
+      });
+
+      totalBatchStudents += counts.total;
+
+      sectionsData.push({
+        _id: section._id,
+        name: section.name,
+        semester: section.semester,
+        teacher: section.teacher ? { _id: section.teacher._id, name: section.teacher.name, email: section.teacher.email } : null,
+        capacity: section.capacity,
+        isActive: section.isActive,
+        studentCounts: counts
+      });
+    }
+
+    overview.push({
+      batchId: batch._id,
+      name: batch.name,
+      year: batch.year,
+      department: batch.department,
+      totalStudents: totalBatchStudents,
+      sections: sectionsData
+    });
+  }
+
+  res.status(200).json({ success: true, data: overview });
+};
+
+// @desc    Move a student to a different section
+// @route   PATCH /api/students/:id/move-section
+exports.moveSection = async (req, res) => {
+  const { newSectionId, reason } = req.body;
+  if (!newSectionId) {
+    return res.status(450).json({ success: false, error: 'Please specify target section ID' });
+  }
+
+  const student = await Student.findById(req.params.id);
+  if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+
+  // Log previous section details
+  student.previousSection = student.section;
+  student.sectionChangedAt = new Date();
+  student.sectionChangeReason = reason || 'Moved by Admin';
+  student.sectionChangeBy = req.user.id;
+  
+  // Update section
+  student.section = newSectionId;
+  
+  await student.save();
+
+  // Sync enrollment history
+  const { transferStudentSection } = require('../services/enrollmentService');
+  await transferStudentSection(student._id, student.previousSection, newSectionId, reason).catch(err => console.error("Enrollment sync failed on moveSection:", err));
+
+  res.status(200).json({ success: true, data: student });
+};
+
+// @desc    Bulk move students to a different section
+// @route   PATCH /api/students/bulk-move
+exports.bulkMove = async (req, res) => {
+  const { studentIds, newSectionId, reason } = req.body;
+  if (!newSectionId) {
+    return res.status(450).json({ success: false, error: 'Please specify target section ID' });
+  }
+  if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
+    return res.status(400).json({ success: false, error: 'Please provide student IDs' });
+  }
+
+  const results = [];
+  for (const id of studentIds) {
+    const student = await Student.findById(id);
+    if (student) {
+      student.previousSection = student.section;
+      student.sectionChangedAt = new Date();
+      student.sectionChangeReason = reason || 'Bulk moved by Admin';
+      student.sectionChangeBy = req.user.id;
+      student.section = newSectionId;
+      await student.save();
+
+      // Sync enrollment history
+      const { transferStudentSection } = require('../services/enrollmentService');
+      await transferStudentSection(student._id, student.previousSection, newSectionId, reason).catch(err => console.error(`Enrollment sync failed on bulkMove for student ${student._id}:`, err));
+
+      results.push(student);
+    }
+  }
+
+  res.status(200).json({ success: true, count: results.length, data: results });
+};
+
+// @desc    Change student status with audit logging and auth access syncing
+// @route   PATCH /api/students/:id/status
+exports.changeStatus = async (req, res) => {
+  const { status, reason, effectiveDate } = req.body;
+  if (!status) {
+    return res.status(400).json({ success: false, error: 'Please specify a status' });
+  }
+
+  const student = await Student.findById(req.params.id);
+  if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+
+  student.status = status;
+  student.isActive = status === 'active';
+  student.statusChangedAt = effectiveDate ? new Date(effectiveDate) : new Date();
+  student.statusChangeReason = reason || 'Status updated by Admin';
+  student.statusChangeBy = req.user.id;
+
+  if (status === 'dropout' && reason) {
+    student.dropoutRemark = reason;
+  }
+
+  await student.save();
+
+  // Sync enrollment history
+  const { createEnrollmentSnapshot } = require('../services/enrollmentService');
+  await createEnrollmentSnapshot([student._id], student.section).catch(err => console.error("Enrollment sync failed on changeStatus:", err));
+
+  // Sync linked User login state (isActive)
+  if (student.userId) {
+    await User.findByIdAndUpdate(student.userId, { 
+      isActive: student.isActive 
+    });
+  }
+
+  res.status(200).json({ success: true, data: student });
+};
+
+// @desc    Bulk change student statuses
+// @route   PATCH /api/students/bulk-status
+exports.bulkChangeStatus = async (req, res) => {
+  const { studentIds, status, reason } = req.body;
+  if (!status) {
+    return res.status(400).json({ success: false, error: 'Please specify a status' });
+  }
+  if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
+    return res.status(400).json({ success: false, error: 'Please provide student IDs' });
+  }
+
+  const results = [];
+  for (const id of studentIds) {
+    const student = await Student.findById(id);
+    if (student) {
+      student.status = status;
+      student.isActive = status === 'active';
+      student.statusChangedAt = new Date();
+      student.statusChangeReason = reason || 'Bulk status updated by Admin';
+      student.statusChangeBy = req.user.id;
+      
+      if (status === 'dropout' && reason) {
+        student.dropoutRemark = reason;
+      }
+
+      await student.save();
+
+      // Sync enrollment history
+      const { createEnrollmentSnapshot } = require('../services/enrollmentService');
+      await createEnrollmentSnapshot([student._id], student.section).catch(err => console.error(`Enrollment sync failed on bulkChangeStatus for student ${student._id}:`, err));
+
+      // Sync linked User isActive state
+      if (student.userId) {
+        await User.findByIdAndUpdate(student.userId, { 
+          isActive: student.isActive 
+        });
+      }
+      
+      results.push(student);
+    }
+  }
+
+  res.status(200).json({ success: true, count: results.length, data: results });
+};
+
+// @desc    Graduate all students in a specific batch
+// @route   PATCH /api/students/graduate-batch
+exports.graduateBatch = async (req, res) => {
+  const { batchId, reason } = req.body;
+  if (!batchId) {
+    return res.status(400).json({ success: false, error: 'Please specify batch ID' });
+  }
+
+  const User = require('../models/User');
+
+  // Find all students in this batch who are not already graduated
+  const students = await Student.find({ batch: batchId, status: { $ne: 'graduated' }, deleted: { $ne: true } });
+
+  if (students.length === 0) {
+    return res.status(200).json({ success: true, count: 0, message: 'No active students found in this batch to graduate.' });
+  }
+
+  const studentIds = students.map(s => s._id);
+
+  // Update all students in the batch
+  await Student.updateMany(
+    { _id: { $in: studentIds } },
+    {
+      $set: {
+        status: 'graduated',
+        isActive: false,
+        statusChangedAt: new Date(),
+        statusChangeReason: reason || 'Graduated full batch',
+        statusChangeBy: req.user.id
+      }
+    }
+  );
+
+  // Sync enrollment history for all graduated students
+  const { createEnrollmentSnapshot } = require('../services/enrollmentService');
+  for (const id of studentIds) {
+    const s = students.find(st => st._id.toString() === id.toString());
+    if(s) await createEnrollmentSnapshot([id], s.section).catch(err => console.error(`Enrollment sync failed on graduateBatch for student ${id}:`, err));
+  }
+
+  // Find all linked User IDs
+  const userIds = students.map(s => s.userId).filter(Boolean);
+
+  if (userIds.length > 0) {
+    // Disable logins for all linked users
+    await User.updateMany(
+      { _id: { $in: userIds } },
+      { $set: { isActive: false } }
+    );
+  }
+
+  res.status(200).json({ success: true, count: studentIds.length, message: `Successfully graduated ${studentIds.length} students.` });
 };

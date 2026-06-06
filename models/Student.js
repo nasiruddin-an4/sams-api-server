@@ -80,7 +80,7 @@ const StudentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'inactive', 'dropout'],
+    enum: ['active', 'inactive', 'dropout', 'suspended', 'graduated'],
     default: 'active'
   },
   dropoutRemark: {
@@ -113,6 +113,30 @@ const StudentSchema = new mongoose.Schema({
   totalFinePaid: {
     type: Number,
     default: 0
+  },
+  previousSection: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Section'
+  },
+  sectionChangedAt: {
+    type: Date
+  },
+  sectionChangeReason: {
+    type: String
+  },
+  sectionChangeBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  statusChangedAt: {
+    type: Date
+  },
+  statusChangeReason: {
+    type: String
+  },
+  statusChangeBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true,

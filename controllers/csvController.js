@@ -95,6 +95,20 @@ exports.uploadStudents = async (req, res) => {
     const className = row.department || row.class; // User prioritized 'department'
     const batchName = row.batch || row.session;   // User prioritized 'batch'/'session'
     const sectionName = row.section || row.Section;
+
+    // Parse gender with smart fallback guessing
+    const genderInput = row.gender || row.Gender || '';
+    let gender = 'male';
+    const lowerGender = genderInput.toLowerCase().trim();
+    if (['male', 'female', 'other'].includes(lowerGender)) {
+      gender = lowerGender;
+    } else if (name) {
+      const femaleKeywords = ['female', 'woman', 'girl', 'she', 'her', 'akter', 'sultana', 'begum', 'jahan', 'habiba', 'tasnim', 'nahar', 'oishee', 'farzana', 'sadia', 'nusrat', 'sharmin', 'umme', 'laboni', 'quamrun', 'begum'];
+      const nameLower = name.toLowerCase();
+      if (femaleKeywords.some(keyword => nameLower.includes(keyword))) {
+        gender = 'female';
+      }
+    }
     
     if (!student_id || !name || !email || !className || !batchName || !sectionName) {
       summary.failed++;
@@ -187,6 +201,7 @@ exports.uploadStudents = async (req, res) => {
         student.name = name;
         student.email = email.toLowerCase();
         student.phone = mobile;
+        student.gender = gender;
         student.class = classDoc._id;
         student.batch = batchDoc._id;
         student.section = sectionDoc._id;
@@ -230,6 +245,10 @@ exports.uploadStudents = async (req, res) => {
           await student.save();
         }
 
+        // Sync enrollment history
+        const { syncStudentEnrollment } = require('../utils/enrollmentSync');
+        await syncStudentEnrollment(student._id).catch(err => console.error(`Enrollment sync failed on CSV update for student ${student._id}:`, err));
+
         summary.updated++;
         createdStudents.push({ 
           studentId: student_id, 
@@ -253,6 +272,7 @@ exports.uploadStudents = async (req, res) => {
           name,
           email: email.toLowerCase(),
           phone: mobile,
+          gender,
           class: classDoc._id,
           batch: batchDoc._id,
           section: sectionDoc._id,
@@ -261,6 +281,10 @@ exports.uploadStudents = async (req, res) => {
           userId: user._id,
           semester: 1
         });
+
+        // Sync enrollment history
+        const { syncStudentEnrollment } = require('../utils/enrollmentSync');
+        await syncStudentEnrollment(student._id).catch(err => console.error(`Enrollment sync failed on CSV creation for student ${student._id}:`, err));
 
         summary.created++; // New student profile created
         createdStudents.push({ 
@@ -291,6 +315,7 @@ exports.uploadStudents = async (req, res) => {
         name,
         email: email.toLowerCase(),
         phone: mobile,
+        gender,
         class: classDoc._id,
         batch: batchDoc._id,
         section: sectionDoc._id,
@@ -299,6 +324,10 @@ exports.uploadStudents = async (req, res) => {
         userId: user._id,
         semester: 1
       });
+
+      // Sync enrollment history
+      const { syncStudentEnrollment } = require('../utils/enrollmentSync');
+      await syncStudentEnrollment(student._id).catch(err => console.error(`Enrollment sync failed on CSV creation for student ${student._id}:`, err));
 
       // Enqueue welcome email in background (only for new creations)
       queueEmail({
@@ -341,9 +370,9 @@ exports.uploadStudents = async (req, res) => {
 // @route   GET /api/csv/template
 // @access  Private/Admin
 exports.downloadTemplate = async (req, res) => {
-  const csvContent = 'name,email,student_id,section,batch,department,session,mobile\n' +
-    'John Doe,john@gmail.com,CSE-2022-001,A,23rd,CSE,2022-2023,01700000000\n' +
-    'Jane Smith,jane@gmail.com,CSE-2022-002,B,23rd,CSE,2022-2023,01800000000';
+  const csvContent = 'name,email,student_id,gender,section,batch,department,session,mobile\n' +
+    'John Doe,john@gmail.com,CSE-2022-001,male,A,23rd,CSE,2022-2023,01700000000\n' +
+    'Jane Smith,jane@gmail.com,CSE-2022-002,female,B,23rd,CSE,2022-2023,01800000000';
 
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename=student_enrollment_template.csv');

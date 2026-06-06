@@ -1,4 +1,5 @@
 const Attendance = require('../models/Attendance');
+const Enrollment = require('../models/Enrollment');
 const Student = require('../models/Student');
 const Section = require('../models/Section');
 const mongoose = require('mongoose');
@@ -52,13 +53,27 @@ exports.markAttendance = async (req, res) => {
       }
     }
     
-    attendance.records = records;
+    // Map active enrollments to records
+    const studentIds = records.map(r => r.student);
+    const activeEnrollments = await Enrollment.find({ student: { $in: studentIds }, section: sectionId, status: 'active' });
+    const enrollmentMap = {};
+    activeEnrollments.forEach(e => { enrollmentMap[e.student.toString()] = e._id; });
+    const enrichedRecords = records.map(r => ({ ...r, enrollment: enrollmentMap[r.student.toString()] || null }));
+
+    attendance.records = enrichedRecords;
     attendance.isHoliday = isHoliday || false;
     attendance.notes = notes;
     attendance.isDraft = isDraft !== undefined ? isDraft : false;
     attendance.markedBy = req.user.id;
     await attendance.save();
   } else {
+    // Map active enrollments to records
+    const studentIds = records.map(r => r.student);
+    const activeEnrollments = await Enrollment.find({ student: { $in: studentIds }, section: sectionId, status: 'active' });
+    const enrollmentMap = {};
+    activeEnrollments.forEach(e => { enrollmentMap[e.student.toString()] = e._id; });
+    const enrichedRecords = records.map(r => ({ ...r, enrollment: enrollmentMap[r.student.toString()] || null }));
+
     attendance = await Attendance.create({
       date: attendanceDate,
       class: classId,
@@ -66,7 +81,7 @@ exports.markAttendance = async (req, res) => {
       section: sectionId,
       subject: subjectId,
       markedBy: req.user.id,
-      records,
+      records: enrichedRecords,
       isHoliday: isHoliday || false,
       isDraft: isDraft !== undefined ? isDraft : false,
       notes

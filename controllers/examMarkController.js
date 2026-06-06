@@ -6,10 +6,11 @@ const { enqueueNotification } = require('../services/queueService');
 // @desc    Get exam marks
 // @route   GET /api/exam-marks
 exports.getExamMarks = async (req, res) => {
-  const { classId, sectionId, subjectId, examType, academicYear, semester, studentId, page = 1, limit = 50 } = req.query;
+  const { classId, batchId, sectionId, subjectId, examType, academicYear, semester, studentId, page = 1, limit = 50 } = req.query;
   const query = {};
 
   if (classId) query.class = classId;
+  if (batchId) query.batch = batchId;
   if (examType) query.examType = examType;
   if (academicYear) query.academicYear = academicYear;
   if (semester) query.semester = parseInt(semester);
@@ -111,6 +112,11 @@ exports.createExamMark = async (req, res) => {
     }
   }
 
+  const Enrollment = require('../models/Enrollment');
+  const activeEnrollment = await Enrollment.findOne({ student: req.body.student, section: req.body.section, status: 'active' });
+  if (activeEnrollment) {
+    req.body.enrollment = activeEnrollment._id;
+  }
   req.body.enteredBy = req.user.id;
   const mark = await ExamMark.create(req.body);
   await mark.populate([
@@ -149,7 +155,16 @@ exports.bulkCreateExamMarks = async (req, res) => {
     }
   }
 
-  const marksWithUser = marks.map(m => ({ ...m, enteredBy: req.user.id }));
+  const Enrollment = require('../models/Enrollment');
+  const studentIds = marks.map(m => m.student);
+  const sectionIds = marks.map(m => m.section);
+  const activeEnrollments = await Enrollment.find({ student: { $in: studentIds }, section: { $in: sectionIds }, status: 'active' });
+  const enrollmentMap = {};
+  activeEnrollments.forEach(e => {
+    enrollmentMap[`${e.student}_${e.section}`] = e._id;
+  });
+
+  const marksWithUser = marks.map(m => ({ ...m, enteredBy: req.user.id, enrollment: enrollmentMap[`${m.student}_${m.section}`] || null }));
   const results = [];
   const errors = [];
 
